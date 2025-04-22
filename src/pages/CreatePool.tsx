@@ -11,7 +11,7 @@ import { ReadWriteFactory } from "doppler-v4-sdk"
 export default function CreatePool() {
   const account = useAccount()
   const { data: walletClient } = useWalletClient()
-  const [isDeploying, setIsDeploying] = useState(false)
+  const [, setIsDeploying] = useState(false)
 
   const addresses = getAddresses(84532)
 

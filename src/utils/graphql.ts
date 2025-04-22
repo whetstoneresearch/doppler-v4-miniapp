@@ -10,6 +10,14 @@ export interface Token {
   symbol: string;
 }
 
+export interface Asset {
+  marketCapUsd: bigint;
+}
+
+export interface DailyVolume {
+  volumeUsd: bigint;
+}
+
 // Pool type definition based on schema
 export interface Pool {
   address: string;
@@ -18,14 +26,14 @@ export interface Pool {
   sqrtPrice: bigint;
   liquidity: bigint;
   createdAt: bigint;
-  asset: string;
+  asset: Asset;
   baseToken: Token;
   quoteToken: Token;
   price: bigint;
   fee: number;
   type: string;
   dollarLiquidity: bigint;
-  dailyVolume: string;
+  dailyVolume: DailyVolume;
   volumeUsd: bigint;
   percentDayChange: number;
   totalFee0: bigint;
@@ -37,6 +45,10 @@ export interface Pool {
   lastSwapTimestamp: bigint | null;
   reserves0: bigint;
   reserves1: bigint;
+}
+
+export interface Pools {
+  items: Pool[];
 }
 
 // GraphQL query for fetching pools
@@ -87,7 +99,7 @@ export const GET_POOLS_QUERY = `
 `;
 
 // Function to fetch pools using TanStack Query
-export const getPools = async (): Promise<Pool[]> => {
-  const response = await client.request<{ pools: Pool[] }>(GET_POOLS_QUERY);
+export const getPools = async (): Promise<Pools> => {
+  const response = await client.request<{ pools: Pools }>(GET_POOLS_QUERY);
   return response.pools;
 };

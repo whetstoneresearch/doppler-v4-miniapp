@@ -2,11 +2,11 @@ import { useParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { GraphQLClient } from "graphql-request"
 import { Pool } from "@/utils/graphql"
-import { Address, formatEther, maxUint256, parseEther, zeroAddress } from "viem"
+import { Address, formatEther, maxUint256, parseEther } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
-import { DOPPLER_V4_ADDRESSES, dopplerAbi, PoolKey, universalRouterAbi } from "doppler-v4-sdk"
+import { DOPPLER_V4_ADDRESSES, dopplerAbi, universalRouterAbi } from "doppler-v4-sdk"
 import { getDrift } from "@/utils/drift"
 import { useAccount, usePublicClient } from "wagmi"
 import { useWalletClient } from "wagmi"
@@ -180,7 +180,7 @@ export default function PoolDetails() {
       try {
         const amountIn = parseEther(value)
         const quote = await fetchQuote(amountIn)
-        setQuotedAmount(quote)
+        setQuotedAmount(quote ?? null)
       } catch (error) {
         console.error("Error fetching quote:", error)
         setQuotedAmount(null)
@@ -189,6 +189,7 @@ export default function PoolDetails() {
       setQuotedAmount(null)
     }
   }
+
 
   const handleTabChange = (value: string) => {
     setIsBuying(value === "buy")
@@ -244,7 +245,7 @@ export default function PoolDetails() {
         
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <p className="text-lg font-medium">{formatNumber(BigInt(pool.dailyVolume.volumeUsd))}</p>
+            <p className="text-lg font-medium">{formatNumber(BigInt(pool.volumeUsd))}</p>
             <p className="text-sm text-muted-foreground">24h Volume</p>
           </div>
           <div>
@@ -257,7 +258,7 @@ export default function PoolDetails() {
 
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <p className="text-lg font-medium">{formatNumber(BigInt(pool.asset.marketCapUsd))}</p>
+            <p className="text-lg font-medium">{formatNumber(BigInt(pool.asset.marketCapUsd ?? 0))}</p>
             <p className="text-sm text-muted-foreground">Market Cap</p>
           </div>
         </div>
