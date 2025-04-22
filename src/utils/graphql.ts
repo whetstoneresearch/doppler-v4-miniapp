@@ -1,0 +1,93 @@
+import { GraphQLClient } from "graphql-request";
+
+// Initialize GraphQL client
+const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/");
+
+// Token type definition
+export interface Token {
+  address: string;
+  name: string;
+  symbol: string;
+}
+
+// Pool type definition based on schema
+export interface Pool {
+  address: string;
+  chainId: bigint;
+  tick: number;
+  sqrtPrice: bigint;
+  liquidity: bigint;
+  createdAt: bigint;
+  asset: string;
+  baseToken: Token;
+  quoteToken: Token;
+  price: bigint;
+  fee: number;
+  type: string;
+  dollarLiquidity: bigint;
+  dailyVolume: string;
+  volumeUsd: bigint;
+  percentDayChange: number;
+  totalFee0: bigint;
+  totalFee1: bigint;
+  graduationThreshold: bigint;
+  graduationBalance: bigint;
+  isToken0: boolean;
+  lastRefreshed: bigint | null;
+  lastSwapTimestamp: bigint | null;
+  reserves0: bigint;
+  reserves1: bigint;
+}
+
+// GraphQL query for fetching pools
+export const GET_POOLS_QUERY = `
+  query GetPools {
+    pools(orderBy: "createdAt", orderDirection: "desc", where: { type: "v4" }) {
+      items {
+        address
+        chainId
+        tick
+        sqrtPrice
+        liquidity
+        createdAt
+        baseToken {
+          address
+          name
+          symbol
+        }
+        quoteToken {
+          address
+          name
+          symbol
+        }
+        price
+        fee
+        type
+        dollarLiquidity
+        dailyVolume {
+          volumeUsd
+        }
+        asset {
+          marketCapUsd 
+        }
+        volumeUsd
+        percentDayChange
+        totalFee0
+        totalFee1
+        graduationThreshold
+        graduationBalance
+        isToken0
+        lastRefreshed
+        lastSwapTimestamp
+        reserves0
+        reserves1
+      }
+    }
+  }
+`;
+
+// Function to fetch pools using TanStack Query
+export const getPools = async (): Promise<Pool[]> => {
+  const response = await client.request<{ pools: Pool[] }>(GET_POOLS_QUERY);
+  return response.pools;
+};
