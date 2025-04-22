@@ -14,7 +14,7 @@ import { ReadQuoter } from "doppler-v4-sdk/dist/entities/quoter/ReadQuoter"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-const client = new GraphQLClient("http://localhost:42069")
+const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/")
 
 const GET_POOL_QUERY = `
   query GetPool($address: String!, $chainId: BigInt!) {
