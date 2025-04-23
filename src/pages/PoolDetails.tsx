@@ -2,13 +2,13 @@ import { useParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { GraphQLClient } from "graphql-request"
 import { Pool } from "@/utils/graphql"
-import { Address, formatEther, maxUint256, parseEther } from "viem"
+import { Address, formatEther, maxUint256, parseEther, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
 import { DOPPLER_V4_ADDRESSES, dopplerAbi, universalRouterAbi } from "doppler-v4-sdk"
 import { getDrift } from "@/utils/drift"
-import { useAccount, usePublicClient } from "wagmi"
+import { useAccount, usePublicClient, useBalance } from "wagmi"
 import { useWalletClient } from "wagmi"
 import { ReadQuoter } from "doppler-v4-sdk/dist/entities/quoter/ReadQuoter"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
@@ -70,6 +70,27 @@ export default function PoolDetails() {
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
   const { v4Quoter, universalRouter } = DOPPLER_V4_ADDRESSES[chainId]
+
+  const { data: pool, isLoading, error } = useQuery({
+    queryKey: ['pool', address],
+    queryFn: async () => {
+      const response = await client.request<{ pool: Pool }>(GET_POOL_QUERY, {
+        address,
+        chainId,
+      })
+      return response.pool
+    },
+  })
+
+  const { data: baseTokenBalance } = useBalance({
+    address: account.address,
+    token: pool?.baseToken.address as Address,
+  })
+
+  const { data: quoteTokenBalance } = useBalance({
+    address: account.address,
+    token: pool?.quoteToken.address as Address,
+  })
 
   const fetchQuote = async (amountIn: bigint) => {
     if (!pool) return
@@ -142,19 +163,6 @@ export default function PoolDetails() {
     })
   }
 
-
-  const { data: pool, isLoading, error } = useQuery({
-    queryKey: ['pool', address],
-    queryFn: async () => {
-      const response = await client.request<{ pool: Pool }>(GET_POOL_QUERY, {
-        address,
-        chainId,
-      })
-      return response.pool
-    },
-  })
-
-
   const formatNumber = (value: bigint) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -200,6 +208,24 @@ export default function PoolDetails() {
   const handleSwap = () => {
     if (!amount || !quotedAmount) return
     executeSwap(parseEther(amount))
+  }
+
+  const handleMaxClick = () => {
+    if (!account.address || !pool) return
+    
+    if (isBuying) {
+      // When buying base token, use quote token balance
+      if (pool.quoteToken.address === zeroAddress) {
+        // ETH balance
+        setAmount(formatEther(quoteTokenBalance?.value ?? 0n))
+      } else {
+        // ERC20 balance
+        setAmount(formatEther(quoteTokenBalance?.value ?? 0n))
+      }
+    } else {
+      // When selling base token, use base token balance
+      setAmount(formatEther(baseTokenBalance?.value ?? 0n))
+    }
   }
 
   if (isLoading) {
@@ -297,7 +323,19 @@ export default function PoolDetails() {
           
           <TabsContent value="buy" className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Amount ({pool.quoteToken.symbol})</label>
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Amount ({pool.quoteToken.symbol})
+                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleMaxClick}
+                  className="text-primary hover:text-primary/80"
+                >
+                  Max
+                </Button>
+              </div>
               <Input
                 type="number"
                 placeholder="0.0"
@@ -315,7 +353,19 @@ export default function PoolDetails() {
           
           <TabsContent value="sell" className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Amount ({pool.baseToken.symbol})</label>
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Amount ({pool.baseToken.symbol})
+                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleMaxClick}
+                  className="text-primary hover:text-primary/80"
+                >
+                  Max
+                </Button>
+              </div>
               <Input
                 type="number"
                 placeholder="0.0"
