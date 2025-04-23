@@ -150,8 +150,8 @@ export default function PoolDetails() {
 
     const actionBuilder = new V4ActionBuilder()
     const [actions, params] = actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, 0n, "0x")
-    .addAction(V4ActionType.SETTLE_ALL, [key.currency0, maxUint256])
-    .addAction(V4ActionType.TAKE_ALL, [key.currency1, 0]).build()
+    .addAction(V4ActionType.SETTLE_ALL, [zeroForOne ? key.currency0 : key.currency1, maxUint256])
+    .addAction(V4ActionType.TAKE_ALL, [zeroForOne ? key.currency1 : key.currency0, 0]).build()
     const [commands, inputs] = new CommandBuilder().addV4Swap(actions, params).build()
 
     await walletClient?.writeContract({
@@ -159,7 +159,7 @@ export default function PoolDetails() {
       abi: universalRouterAbi,
       functionName: "execute",
       args: [commands, inputs],
-      value: amountIn
+      value: zeroForOne ? amountIn : 0n
     })
   }
 

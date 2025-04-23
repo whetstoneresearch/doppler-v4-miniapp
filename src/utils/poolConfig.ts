@@ -4,7 +4,7 @@ export const TOKEN_TOTAL_SUPPLY = parseEther("10000");
 export const TOKEN_NUM_MIN_TO_SELL = parseEther("10000");
 export const TOKEN_MIN_PROCEEDS = parseEther("100");
 export const TOKEN_MAX_PROCEEDS = parseEther("600");
-export const TOKEN_PRICE_START = 0.001;
+export const TOKEN_PRICE_START = 0.00001;
 export const TOKEN_PRICE_END = 0.000001;
 export const TOKEN_FEE = 3000;
 
