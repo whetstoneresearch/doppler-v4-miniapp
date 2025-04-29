@@ -38,6 +38,7 @@ export default function CreatePool() {
       // @ts-ignore
       const rwFactory = new ReadWriteFactory(addresses.airlock, drift);
       const config = rwFactory.buildConfig(deployParams, addresses)
+      await rwFactory.simulateCreate(config)
       await rwFactory.create(config)
     } catch (error) {
       console.error("Deployment failed:", error);
