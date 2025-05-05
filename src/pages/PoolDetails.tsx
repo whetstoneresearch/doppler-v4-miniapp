@@ -5,8 +5,8 @@ import { Pool } from "@/utils/graphql"
 import { Address, formatEther, maxUint256, parseEther, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { useState } from "react"
-import { DOPPLER_V4_ADDRESSES, dopplerAbi, universalRouterAbi } from "doppler-v4-sdk"
+import { useEffect, useState } from "react"
+import { DOPPLER_V4_ADDRESSES, dopplerAbi, ReadFactory, ReadWriteFactory, universalRouterAbi } from "doppler-v4-sdk"
 import { getDrift } from "@/utils/drift"
 import { useAccount, usePublicClient, useBalance } from "wagmi"
 import { useWalletClient } from "wagmi"
@@ -69,7 +69,19 @@ export default function PoolDetails() {
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
-  const { v4Quoter, universalRouter } = DOPPLER_V4_ADDRESSES[chainId]
+  const { v4Quoter, universalRouter, airlock } = DOPPLER_V4_ADDRESSES[chainId]
+
+  const drift = getDrift(walletClient)
+  useEffect(() => {
+    const fetchAssetData = async () => {
+      console.log("airlock", airlock)
+      const rFactory = new ReadFactory(airlock, drift)
+      const assetData = await rFactory.getAssetData("0xeD25c0423134C1CCAB22E1394ec86be4053Cf1BC" as Address)
+      console.log(assetData)
+    }
+    fetchAssetData()
+  }, [])
+
 
   const { data: pool, isLoading, error } = useQuery({
     queryKey: ['pool', address],

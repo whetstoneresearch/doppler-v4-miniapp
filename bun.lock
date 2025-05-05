@@ -14,7 +14,7 @@
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "doppler-router": "^1.0.7",
-        "doppler-v4-sdk": "^0.2.0-rc13",
+        "doppler-v4-sdk": "^0.2.0-rc24",
         "graphql-request": "^7.1.2",
         "lucide-react": "^0.487.0",
         "react": "^19.0.0",
@@ -783,7 +783,7 @@
 
     "doppler-router": ["doppler-router@1.0.7", "", { "peerDependencies": { "viem": "^2.22.15" } }, "sha512-bNlrUN+irXX/l9X4+dabwib3QacsZ1uXIO7ObVTl3YHwubBhVBlZ2Gd6C3FLq8ghi3GtzKzDn2KasuWXaOHhyg=="],
 
-    "doppler-v4-sdk": ["doppler-v4-sdk@0.2.0-rc13", "", { "dependencies": { "@delvtech/drift": "^0.8.4", "@types/node": "^22.13.17", "@uniswap/sdk-core": "^5.9.0", "@uniswap/v4-sdk": "^1.21.2", "ethers": "^5.8.0", "tsup": "^8.4.0", "turbo": "^2.4.4" } }, "sha512-JzIBFG5bnfaIHP3Mx/oAL59dZLiOhccvZfLp38LbGL+UuIgQg38R64LiEyJ1ZY6h7DkRkISusRSwzhWpbRAq1A=="],
+    "doppler-v4-sdk": ["doppler-v4-sdk@0.2.0-rc24", "", { "dependencies": { "@delvtech/drift": "^0.8.4", "@types/node": "^22.13.17", "@uniswap/sdk-core": "^5.9.0", "@uniswap/v4-sdk": "^1.21.2", "ethers": "^5.8.0", "tsup": "^8.4.0", "turbo": "^2.4.4" } }, "sha512-jYOoNXRWKvbSs9j2AEMifP+6MbSqeInZi0toiAib+A5O09rIGlnaldHcPq6laU9Eifr4fYfQZiNp/7fHTudqbg=="],
 
     "dotenv": ["dotenv@14.3.2", "", {}, "sha512-vwEppIphpFdvaMCaHfCEv9IgwcxMljMw2TnAQBB4VWPvzXQLTb82jwmdOKzlEVUL3gNFT4l4TPKO+Bn+sqcrVQ=="],
 

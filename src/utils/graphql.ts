@@ -1,7 +1,8 @@
 import { GraphQLClient } from "graphql-request";
 
 // Initialize GraphQL client
-const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/");
+// const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/");
+const client = new GraphQLClient("http://localhost:42069/");
 
 // Token type definition
 export interface Token {

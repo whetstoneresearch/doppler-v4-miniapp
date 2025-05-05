@@ -1,12 +1,14 @@
 import { parseEther, zeroAddress } from "viem";
 
-export const TOKEN_TOTAL_SUPPLY = parseEther("10000");
-export const TOKEN_NUM_MIN_TO_SELL = parseEther("10000");
+export const TOKEN_TOTAL_SUPPLY = parseEther("1000000000");
+export const TOKEN_NUM_MIN_TO_SELL = parseEther("900000000");
 export const TOKEN_MIN_PROCEEDS = parseEther("100");
 export const TOKEN_MAX_PROCEEDS = parseEther("600");
 export const TOKEN_PRICE_START = 0.00001;
-export const TOKEN_PRICE_END = 0.000001;
+export const TOKEN_PRICE_END = 0.0000001;
 export const TOKEN_FEE = 3000;
+export const DEFAULT_START_TICK = 167000;
+export const DEFAULT_END_TICK = 195000;
 
 export function tokenParams(token: {
   name: string;
@@ -20,11 +22,11 @@ export function tokenParams(token: {
     numTokensToSell: TOKEN_NUM_MIN_TO_SELL,
     blockTimestamp: Number(token.timestamp),
     startTimeOffset: 1,
-    duration: 3,
-    epochLength: 1600,
-    priceRange: {
-      startPrice: TOKEN_PRICE_START,
-      endPrice: TOKEN_PRICE_END,
+    duration: 1,
+    epochLength: 200,
+    tickRange: {
+      startTick: DEFAULT_START_TICK,
+      endTick: DEFAULT_END_TICK,
     },
     tickSpacing: 8,
     fee: TOKEN_FEE,
