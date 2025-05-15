@@ -28,6 +28,7 @@ export default function CreatePool() {
       if (!account.address) throw new Error("Account address not found");
 
       const block = await getBlock(walletClient)
+      console.log(addresses)
 
       const drift = getDrift(walletClient);
       const deployParams = tokenParams({

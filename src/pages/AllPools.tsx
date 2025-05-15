@@ -69,8 +69,6 @@ function PoolCard({ pool }: { pool: Pool }) {
 export default function AllPools() {
   const { data: pools, isLoading, error } = usePools()
 
-  console.log(pools)
-
 
   if (isLoading) {
     return (
