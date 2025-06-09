@@ -1,6 +1,6 @@
 import { useParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
-import { client, getPool, Pool } from "@/utils/graphql"
+import { getPool } from "@/utils/graphql"
 import { Address, formatEther, maxUint256, parseEther, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
