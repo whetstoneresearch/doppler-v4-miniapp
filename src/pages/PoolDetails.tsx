@@ -1,7 +1,6 @@
 import { useParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
-import { GraphQLClient } from "graphql-request"
-import { Pool } from "@/utils/graphql"
+import { client, getPool, Pool } from "@/utils/graphql"
 import { Address, formatEther, maxUint256, parseEther, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -14,84 +13,38 @@ import { ReadQuoter } from "doppler-v4-sdk/dist/entities/quoter/ReadQuoter"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/")
-
-const GET_POOL_QUERY = `
-  query GetPool($address: String!, $chainId: BigInt!) {
-    pool(address: $address, chainId: $chainId) {
-      address
-      chainId
-      tick
-      sqrtPrice
-      liquidity
-      createdAt
-      baseToken {
-        address
-        name
-        symbol
-      }
-      quoteToken {
-        address
-        name
-        symbol
-      }
-      price
-      fee
-      type
-      dollarLiquidity
-      dailyVolume {
-        volumeUsd
-      }
-      volumeUsd
-      percentDayChange
-      totalFee0
-      totalFee1
-      graduationThreshold
-      graduationBalance
-      isToken0
-      lastRefreshed
-      lastSwapTimestamp
-      reserves0
-      reserves1
-      asset {
-        marketCapUsd
-      }
-    }
-  }
-`
 
 export default function PoolDetails() {
-  const { address } = useParams<{ address: string }>()
+  const { address, chainId: chainIdParam } = useParams<{ address: string; chainId: string }>()
   const account = useAccount()
   const { data: walletClient } = useWalletClient(account)
   const publicClient = usePublicClient()
-  const chainId = 84532 // Base Goerli chain ID
+  const chainId = parseInt(chainIdParam || "84532")
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
   const { v4Quoter, universalRouter } = DOPPLER_V4_ADDRESSES[chainId]
 
-  console.log(address)
 
   const { data: pool, isLoading, error } = useQuery({
-    queryKey: ['pool', address],
+    queryKey: ['v4-pool', address, chainId],
     queryFn: async () => {
-      const response = await client.request<{ pool: Pool }>(GET_POOL_QUERY, {
-        address,
-        chainId,
-      })
-      return response.pool
+      const response = await getPool(address as Address, chainId)
+      return response
     },
   })
 
+  console.log(pool, error, isLoading)
+
+
   const { data: baseTokenBalance } = useBalance({
     address: account.address,
-    token: pool?.baseToken.address as Address,
+    token: pool?.baseToken?.address as Address,
   })
 
   const { data: quoteTokenBalance } = useBalance({
     address: account.address,
-    token: pool?.quoteToken.address as Address,
+    token: pool?.quoteToken?.address as Address,
   })
 
   const fetchQuote = async (amountIn: bigint) => {
@@ -286,7 +239,7 @@ export default function PoolDetails() {
 
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <p className="text-lg font-medium">{formatNumber(BigInt(pool.asset.marketCapUsd ?? 0))}</p>
+            <p className="text-lg font-medium">{formatNumber(BigInt(pool.marketCapUsd || pool.asset?.marketCapUsd || 0))}</p>
             <p className="text-sm text-muted-foreground">Market Cap</p>
           </div>
         </div>

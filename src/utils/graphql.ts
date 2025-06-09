@@ -1,7 +1,8 @@
 import { GraphQLClient } from "graphql-request";
+import { Address } from "viem";
 
 // Initialize GraphQL client
-const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/");
+export const client = new GraphQLClient("https://doppler-dev.ponder-dev.com/");
 // const client = new GraphQLClient("http://localhost:42069/");
 
 // Token type definition
@@ -46,6 +47,7 @@ export interface Pool {
   lastSwapTimestamp: bigint | null;
   reserves0: bigint;
   reserves1: bigint;
+  marketCapUsd?: bigint;
 }
 
 export interface Pools {
@@ -81,7 +83,7 @@ export const GET_POOLS_QUERY = `
           volumeUsd
         }
         asset {
-          marketCapUsd 
+          marketCapUsd
         }
         volumeUsd
         percentDayChange
@@ -99,8 +101,62 @@ export const GET_POOLS_QUERY = `
   }
 `;
 
+export const GET_POOL_QUERY = `
+  query GetPool($address: String!, $chainId: BigInt!) {
+    pool(address: $address, chainId: $chainId) {
+      address
+      chainId
+      tick
+      sqrtPrice
+      liquidity
+      createdAt
+      asset {
+        marketCapUsd
+      }
+      baseToken {
+        address
+        name
+        symbol
+      }
+      quoteToken {
+        address
+        name
+        symbol
+      }
+      price
+      fee
+      type
+      dollarLiquidity
+      dailyVolume {
+        volumeUsd
+      }
+      volumeUsd
+      percentDayChange
+      totalFee0
+      totalFee1
+      graduationThreshold
+      graduationBalance
+      isToken0
+      lastRefreshed
+      lastSwapTimestamp
+      reserves0
+      reserves1
+      marketCapUsd
+    }
+  }
+`
+
+
 // Function to fetch pools using TanStack Query
 export const getPools = async (): Promise<Pools> => {
   const response = await client.request<{ pools: Pools }>(GET_POOLS_QUERY);
   return response.pools;
 };
+
+export const getPool = async (address: Address, chainId: number): Promise<Pool> => {
+  const response = await client.request<{ pool: Pool }>(GET_POOL_QUERY, {
+    address,
+    chainId: BigInt(chainId).toString(),
+  })
+  return response.pool
+}

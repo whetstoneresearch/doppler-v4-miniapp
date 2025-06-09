@@ -59,7 +59,7 @@ function PoolCard({ pool }: { pool: Pool }) {
         </div>
       </div>
 
-      <Link to={`/pool/${pool.address}`}>
+      <Link to={`/pool/${pool.chainId}/${pool.address}`}>
         <Button variant="secondary" className="w-full">View Details</Button>
       </Link>
     </div>

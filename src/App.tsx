@@ -21,7 +21,7 @@ function App() {
                 <Routes>
                   <Route path="/" element={<AllPools />} />
                   <Route path="/create" element={<CreatePool />} />
-                  <Route path="/pool/:address" element={<PoolDetails />} />
+                  <Route path="/pool/:chainId/:address" element={<PoolDetails />} />
                 </Routes>
               </main>
             </div>
