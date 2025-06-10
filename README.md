@@ -1,54 +1,75 @@
-# React + TypeScript + Vite
+# Doppler V4 Mini App
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A modern web application built with React, TypeScript, and Vite that integrates with the Doppler V4 protocol. This application provides a user interface for interacting with Doppler's liquidity bootstrapping protocol and a starting point to build your own applications on Doppler. 
 
-Currently, two official plugins are available:
+## Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Frontend Framework**: React 
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS
+- **UI Components**: Radix UI
+- **State Management**: React Query
+- **API Client**: GraphQL Request
+- **Web3 Integration**: wagmi, viem
 
-## Expanding the ESLint configuration
+## Prerequisites
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- Node.js (Latest LTS version recommended)
+- Bun or your favorite package manager
+- A Web3 wallet (like MetaMask) 
 
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+## Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/whetstoneresearch/doppler-v4-miniapp
+cd doppler-v4-miniapp
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+2. Install 
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
+```bash
+bun install
 ```
+
+## Development
+
+To start the development server:
+
+```bash
+bun run dev
+```
+
+This will start the Vite development server with hot module replacement enabled.
+
+## Available Scripts
+
+- `bun run dev` - Start development server
+- `bun run build` - Build for production
+- `bun run lint` - Run ESLint
+- `bun run preview` - Preview production build locally
+
+## Project Structure
+
+```
+src/
+├── assets/        # Static assets
+├── components/    # Reusable UI components
+├── hooks/         # Custom React hooks
+├── lib/          # Utility libraries and configurations
+├── pages/        # Page components
+├── utils/        # Helper functions
+└── App.tsx       # Root component
+```
+
+## Deployment config
+
+This demo application is currently configured to be ran on Base Sepolia with the default contract addresses provided from the [doppler-v4-sdk](https://github.com/whetstoneresearch/doppler-sdk/tree/main/packages/doppler-v4-sdk). It also comes out of the box with a predefined and hosted [Doppler indexer](https://github.com/whetstoneresearch/doppler-sdk/tree/main/packages/doppler-v3-indexer) to make it as easy as possible to get started.
+
+## Testing
+
+In order to use the demo application to create or swap tokens, you will need a wallet configured on Base Sepolia with testnet ETH. [Here's a list of publicly available faucets](https://docs.base.org/chain/network-faucets). 
+
+## License
+
+[MIT](/LICENSE)
