@@ -89,7 +89,8 @@ export const GET_POOLS_QUERY = `
         percentDayChange
         totalFee0
         totalFee1
-        graduationThreshold
+        minThreshold
+        maxThreshold
         graduationBalance
         isToken0
         lastRefreshed
@@ -134,7 +135,8 @@ export const GET_POOL_QUERY = `
       percentDayChange
       totalFee0
       totalFee1
-      graduationThreshold
+      minThreshold
+      maxThreshold
       graduationBalance
       isToken0
       lastRefreshed
