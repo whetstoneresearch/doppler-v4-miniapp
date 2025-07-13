@@ -40,7 +40,6 @@ export interface Pool {
   percentDayChange: number;
   totalFee0: bigint;
   totalFee1: bigint;
-  graduationThreshold: bigint;
   graduationBalance: bigint;
   isToken0: boolean;
   lastRefreshed: bigint | null;
@@ -89,7 +88,6 @@ export const GET_POOLS_QUERY = `
         percentDayChange
         totalFee0
         totalFee1
-        graduationThreshold
         graduationBalance
         isToken0
         lastRefreshed
@@ -134,7 +132,6 @@ export const GET_POOL_QUERY = `
       percentDayChange
       totalFee0
       totalFee1
-      graduationThreshold
       graduationBalance
       isToken0
       lastRefreshed
