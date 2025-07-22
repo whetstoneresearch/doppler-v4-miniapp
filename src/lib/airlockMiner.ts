@@ -8,7 +8,15 @@ import {
   Hex,
   keccak256,
 } from "viem";
-import { encodeTokenFactoryData } from "doppler-v4-sdk";
+// Unified SDK imports (not yet used)
+// @ts-ignore - Imports added for future migration
+import {
+  airlockAbi,
+  derc20Abi,
+  dopplerHookAbi,
+  type TokenConfig,
+  type DynamicAuctionConfig
+} from "doppler-sdk";
 
 const FLAG_MASK = BigInt(0x3fff);
 
@@ -177,18 +185,18 @@ export function mine(params: MineV4Params): [Hash, Address, Address, Hex, Hex] {
     tokenURI,
   } = params.tokenFactoryData;
 
-  const tokenFactoryData = encodeTokenFactoryData(
-    {
-      name,
-      symbol,
-      tokenURI,
-    },
-    {
-      amounts,
-      recipients,
-      vestingDuration,
-      yearlyMintRate,
-    }
+  // Inline encodeTokenFactoryData logic since it's not exported
+  const tokenFactoryData = encodeAbiParameters(
+    [
+      { type: "string" },
+      { type: "string" },
+      { type: "string" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "address[]" },
+      { type: "uint256[]" },
+    ],
+    [name, symbol, tokenURI, vestingDuration, yearlyMintRate, recipients, amounts]
   );
 
   const { airlock, initialSupply } = params;

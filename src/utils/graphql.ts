@@ -1,7 +1,7 @@
 import { GraphQLClient } from "graphql-request";
 
 // Initialize GraphQL client
-const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/");
+const client = new GraphQLClient("https://doppler-dev.ponder-dev.com/");
 // const client = new GraphQLClient("http://localhost:42069/");
 
 // Token type definition
@@ -39,7 +39,7 @@ export interface Pool {
   percentDayChange: number;
   totalFee0: bigint;
   totalFee1: bigint;
-  graduationThreshold: bigint;
+  graduationPercentage: bigint;
   graduationBalance: bigint;
   isToken0: boolean;
   lastRefreshed: bigint | null;
@@ -87,7 +87,7 @@ export const GET_POOLS_QUERY = `
         percentDayChange
         totalFee0
         totalFee1
-        graduationThreshold
+        graduationPercentage
         graduationBalance
         isToken0
         lastRefreshed

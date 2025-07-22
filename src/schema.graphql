@@ -244,7 +244,7 @@ type pool {
   percentDayChange: Float!
   totalFee0: BigInt!
   totalFee1: BigInt!
-  graduationThreshold: BigInt!
+  graduationPercentage: BigInt!
   graduationBalance: BigInt!
   isToken0: Boolean!
   lastRefreshed: BigInt

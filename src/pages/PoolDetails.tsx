@@ -11,6 +11,14 @@ import { getDrift } from "@/utils/drift"
 import { useAccount, usePublicClient, useBalance } from "wagmi"
 import { useWalletClient } from "wagmi"
 import { ReadQuoter } from "doppler-v4-sdk/dist/entities/quoter/ReadQuoter"
+// Unified SDK imports (not yet used)
+// @ts-ignore - Imports added for future migration
+import { 
+  Quoter,
+  DynamicAuction,
+  getAddresses as getUnifiedAddresses,
+  type QuoteResult 
+} from "doppler-sdk"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -46,7 +54,7 @@ const GET_POOL_QUERY = `
       percentDayChange
       totalFee0
       totalFee1
-      graduationThreshold
+      graduationPercentage
       graduationBalance
       isToken0
       lastRefreshed
@@ -65,7 +73,7 @@ export default function PoolDetails() {
   const account = useAccount()
   const { data: walletClient } = useWalletClient(account)
   const publicClient = usePublicClient()
-  const chainId = 84532 // Base Goerli chain ID
+  const chainId = 84532 // Base Sepolia chain ID
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
@@ -97,6 +105,7 @@ export default function PoolDetails() {
   const fetchQuote = async (amountIn: bigint) => {
     if (!pool) return
     const drift = getDrift(walletClient)
+    // @ts-ignore - Drift type mismatch between v4-sdk and unified sdk
     const quoter = new ReadQuoter(v4Quoter, drift)
 
     const poolKey = await publicClient?.readContract({
