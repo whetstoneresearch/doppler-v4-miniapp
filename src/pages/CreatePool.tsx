@@ -16,6 +16,7 @@ export default function CreatePool() {
   const publicClient = usePublicClient() as PublicClient
   const [, setIsDeploying] = useState(false)
   const [isDeployingUnified, setIsDeployingUnified] = useState(false)
+  const [auctionType, setAuctionType] = useState<'static' | 'dynamic'>('dynamic')
 
   const addresses = getAddresses(84532)
 
@@ -45,7 +46,7 @@ export default function CreatePool() {
         timestamp: adjustedTimestamp,
       })
       // @ts-ignore
-      const rwFactory = new ReadWriteFactory(addresses.airlock, drift);
+      const rwFactory = new ReadWriteFactory(addresses.v4.airlock, drift);
       
       // Encode V4 migrator data with beneficiaries
       // 95% to token creator, 5% to airlock owner (handled automatically by SDK)
@@ -63,16 +64,16 @@ export default function CreatePool() {
       
         const { createParams, hook, token } = rwFactory.buildConfig(
         { ...deployParams, liquidityMigratorData: v4MigratorData },
-        addresses
+        addresses.v4
       )
       
       // Log V4 SDK arguments
       console.log("=== V4 SDK DEPLOYMENT ARGUMENTS ===");
-      console.log("Deploy Params:", JSON.stringify(deployParams, (key, value) => 
+      console.log("Deploy Params:", JSON.stringify(deployParams, (_key, value) => 
         typeof value === 'bigint' ? value.toString() : value, 2));
       console.log("Addresses:", JSON.stringify(addresses, null, 2));
       console.log("V4 Migrator Data:", v4MigratorData);
-      console.log("Create Params:", JSON.stringify(createParams, (key, value) => 
+      console.log("Create Params:", JSON.stringify(createParams, (_key, value) => 
         typeof value === 'bigint' ? value.toString() : value, 2));
       console.log("Expected Hook Address:", hook);
       console.log("Expected Token Address:", token);
@@ -99,8 +100,8 @@ export default function CreatePool() {
 
       // Use the unified SDK
       const sdk = new DopplerSDK({
-        walletClient,
-        publicClient,
+        walletClient: walletClient as any, // Cast to any to avoid viem version mismatch
+        publicClient: publicClient as any, // Cast to any to avoid viem version mismatch
         chainId: 84532, // Base Sepolia
       });
 
@@ -108,7 +109,7 @@ export default function CreatePool() {
       
       // Get airlock owner address
       const airlockOwner = await publicClient.readContract({
-        address: addresses.airlock,
+        address: addresses.v4.airlock,
         abi: [{
           name: 'owner',
           type: 'function',
@@ -119,7 +120,43 @@ export default function CreatePool() {
         functionName: 'owner',
       }) as `0x${string}`;
       
-      // Log unified SDK arguments before building config
+      // Handle both static and dynamic auctions
+      if (auctionType === 'static') {
+        // Use WETH address directly from unified SDK addresses
+        const weth = addresses.v3.weth;
+
+        // Static auction configuration
+        const staticConfig = factory.buildStaticAuctionConfig({
+          name: formData.tokenName,
+          symbol: formData.tokenSymbol,
+          tokenURI: "", // Should be fetched from metadata service
+          numeraire: weth,
+          fee: 10000, // 1% fee tier (matches V3 SDK defaults)
+          // Use default V3 tick range from the SDK
+          tickRange: { startTick: 175000, endTick: 225000 }, // V3 SDK defaults
+          migration: {
+            type: 'uniswapV2' as const
+          },
+          integrator: account.address,
+        }, account.address);
+        
+        console.log("=== UNIFIED SDK STATIC AUCTION DEPLOYMENT ===");
+        console.log("Static Config:", JSON.stringify(staticConfig, (_key, value) => 
+          typeof value === 'bigint' ? value.toString() : value, 2));
+        console.log("=========================================");
+        
+        // Create static auction
+        const result = await factory.createStaticAuction(staticConfig);
+        
+        console.log("Unified SDK static auction deployment completed!");
+        console.log("Transaction hash:", result.transactionHash);
+        console.log("Token address:", result.tokenAddress);
+        console.log("Pool address:", result.poolAddress);
+        
+        return;
+      }
+      
+      // Dynamic auction params (existing code)
       const unifiedSDKParams = {
         userAddress: account.address,
         token: {
@@ -174,7 +211,7 @@ export default function CreatePool() {
       
       // Log unified SDK arguments
       console.log("=== UNIFIED SDK DEPLOYMENT ARGUMENTS ===");
-      console.log("Unified SDK Params:", JSON.stringify(unifiedSDKParams, (key, value) => 
+      console.log("Unified SDK Params:", JSON.stringify(unifiedSDKParams, (_key, value) => 
         typeof value === 'bigint' ? value.toString() : value, 2));
       console.log("Airlock Owner:", airlockOwner);
       console.log("Chain ID:", 84532);
@@ -208,7 +245,7 @@ export default function CreatePool() {
         useGovernance: true,
       }, account.address);
       
-      console.log("Built Config:", JSON.stringify(buildConfig, (key, value) => 
+      console.log("Built Config:", JSON.stringify(buildConfig, (_key, value) => 
         typeof value === 'bigint' ? value.toString() : value, 2));
       console.log("========================================");
       
@@ -235,6 +272,38 @@ export default function CreatePool() {
         <div className="border border-primary/20 rounded-lg p-6 bg-card/50 backdrop-blur">
           <form onSubmit={handleDeploy} className="space-y-6">
             <div className="space-y-2">
+              <label className="text-sm font-medium">Auction Type</label>
+              <div className="flex gap-4">
+                <button
+                  type="button"
+                  onClick={() => setAuctionType('static')}
+                  className={`flex-1 px-4 py-2 rounded-md transition-colors ${
+                    auctionType === 'static' 
+                      ? 'bg-primary text-primary-foreground' 
+                      : 'bg-background/50 border border-input hover:bg-background/70'
+                  }`}
+                >
+                  Static Auction (V3)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuctionType('dynamic')}
+                  className={`flex-1 px-4 py-2 rounded-md transition-colors ${
+                    auctionType === 'dynamic' 
+                      ? 'bg-primary text-primary-foreground' 
+                      : 'bg-background/50 border border-input hover:bg-background/70'
+                  }`}
+                >
+                  Dynamic Auction (V4)
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {auctionType === 'static' 
+                  ? 'Traditional bonding curve with fixed liquidity distribution across price range'
+                  : 'Dutch auction with dynamic rebalancing across epochs'}
+              </p>
+            </div>
+            <div className="space-y-2">
               <label className="text-sm font-medium">Token Name</label>
               <input 
                 type="text"
@@ -259,8 +328,8 @@ export default function CreatePool() {
             <div className="mt-6 p-4 border border-yellow-500/30 rounded-lg bg-yellow-500/5">
               <p className="text-sm text-yellow-600 mb-2">Choose your deployment method:</p>
               <ul className="text-xs text-muted-foreground space-y-1">
-                <li>• <strong>V4 SDK</strong>: Uses the existing V4-specific SDK (current production)</li>
-                <li>• <strong>Unified SDK</strong>: Uses the new unified SDK (experimental)</li>
+                <li>• <strong>V4 SDK</strong>: Uses the existing V4-specific SDK (dynamic auctions only)</li>
+                <li>• <strong>Unified SDK</strong>: Supports both static (V3) and dynamic (V4) auctions</li>
               </ul>
             </div>
             <div className="space-y-4 pt-4">
@@ -277,7 +346,7 @@ export default function CreatePool() {
                   className="flex-1 bg-green-600/90 hover:bg-green-600/80"
                   disabled={isDeployingUnified}
                 >
-                  {isDeployingUnified ? "Deploying..." : "Create Token (Unified SDK)"}
+                  {isDeployingUnified ? "Deploying..." : `Create ${auctionType === 'static' ? 'Static' : 'Dynamic'} Token (Unified SDK)`}
                 </Button>
               </div>
               <Link to="/" className="block">
