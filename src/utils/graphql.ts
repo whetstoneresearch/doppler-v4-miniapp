@@ -2,7 +2,7 @@ import { GraphQLClient } from "graphql-request";
 import { Address } from "viem";
 
 // Initialize GraphQL client
-export const client = new GraphQLClient("https://doppler-dev.ponder-dev.com/");
+export const client = new GraphQLClient("https://doppler-dev-g283.marble.live/");
 // const client = new GraphQLClient("http://localhost:42069/");
 
 // Token type definition
