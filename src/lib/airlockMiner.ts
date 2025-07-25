@@ -1,4 +1,3 @@
-import { DERC20Bytecode, DopplerBytecode } from "doppler-v4-sdk";
 import {
   Address,
   encodeAbiParameters,
@@ -8,14 +7,9 @@ import {
   Hex,
   keccak256,
 } from "viem";
-// Unified SDK imports (not yet used)
-// @ts-ignore - Imports added for future migration
 import {
-  airlockAbi,
-  derc20Abi,
-  dopplerHookAbi,
-  type TokenConfig,
-  type DynamicAuctionConfig
+  DERC20Bytecode,
+  DopplerBytecode
 } from "doppler-sdk";
 
 const FLAG_MASK = BigInt(0x3fff);

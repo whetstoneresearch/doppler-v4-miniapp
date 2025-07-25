@@ -21,7 +21,6 @@
     "clsx": "^2.1.1",
     "doppler-router": "^1.0.7",
     "doppler-sdk": "link:../doppler-sdk/packages/doppler-sdk",
-    "doppler-v4-sdk": "^0.2.0-rc36",
     "graphql-request": "^7.1.2",
     "lucide-react": "^0.487.0",
     "react": "^19.0.0",

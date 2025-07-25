@@ -3,19 +3,15 @@ import { Link } from "react-router-dom"
 import { useState } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
 import { getAddresses } from "@/utils/getAddresses"
-import { getDrift } from "@/utils/drift"
-import { getBlock } from "viem/actions"
-import { tokenParams } from "@/utils/poolConfig"
-import { ReadWriteFactory } from "doppler-v4-sdk"
 import { DopplerSDK } from "doppler-sdk"
 import { PublicClient } from "viem"
+import { getBlock } from "viem/actions"
 
 export default function CreatePool() {
   const account = useAccount()
   const { data: walletClient } = useWalletClient()
   const publicClient = usePublicClient() as PublicClient
-  const [, setIsDeploying] = useState(false)
-  const [isDeployingUnified, setIsDeployingUnified] = useState(false)
+  const [isDeploying, setIsDeploying] = useState(false)
   const [auctionType, setAuctionType] = useState<'static' | 'dynamic'>('dynamic')
 
   const addresses = getAddresses(84532)
@@ -25,76 +21,11 @@ export default function CreatePool() {
     tokenSymbol: '',
   })
 
+
   const handleDeploy = async (e: React.FormEvent) => {
-    if (!walletClient) throw new Error("Wallet client not found");
-    e.preventDefault();
-    setIsDeploying(true);
-    try {
-      if (!account.address) throw new Error("Account address not found");
-
-      const block = await getBlock(walletClient)
-      console.log(addresses)
-
-      const drift = getDrift(walletClient);
-
-      // Add 5 minutes to current timestamp to ensure start time is in the future
-      // The SDK adds 30 seconds to this, so we'll have ~5.5 minutes buffer
-      const adjustedTimestamp = block.timestamp + 300n;
-      const deployParams = tokenParams({
-        name: formData.tokenName,
-        symbol: formData.tokenSymbol,
-        timestamp: adjustedTimestamp,
-      })
-      // @ts-ignore
-      const rwFactory = new ReadWriteFactory(addresses.v4.airlock, drift);
-      
-      // Encode V4 migrator data with beneficiaries
-      // 95% to token creator, 5% to airlock owner (handled automatically by SDK)
-      const v4MigratorData = await rwFactory.encodeV4MigratorData({
-        fee: 3000, // 0.3% fee tier
-        tickSpacing: 60, // Standard tick spacing for 0.3% pools
-        lockDuration: 60 * 60 * 24 * 30, // 30 days lock duration
-        beneficiaries: [
-          {
-            beneficiary: account.address, // Token creator gets 95% (SDK will adjust this)
-            shares: BigInt(1e18), // 100% (SDK will scale to 95%)
-          }
-        ]
-      }, true); // includeDefaultBeneficiary = true to add 5% for airlock owner
-      
-        const { createParams, hook, token } = rwFactory.buildConfig(
-        { ...deployParams, liquidityMigratorData: v4MigratorData },
-        addresses.v4
-      )
-      
-      // Log V4 SDK arguments
-      console.log("=== V4 SDK DEPLOYMENT ARGUMENTS ===");
-      console.log("Deploy Params:", JSON.stringify(deployParams, (_key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
-      console.log("Addresses:", JSON.stringify(addresses, null, 2));
-      console.log("V4 Migrator Data:", v4MigratorData);
-      console.log("Create Params:", JSON.stringify(createParams, (_key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
-      console.log("Expected Hook Address:", hook);
-      console.log("Expected Token Address:", token);
-      console.log("=================================");
-
-      const simulation = await rwFactory.simulateCreate(createParams)
-      console.log("V4 SDK Simulation Result:", simulation);
-      
-      const txHash = await rwFactory.create(createParams)
-      console.log("V4 SDK Transaction Hash:", txHash)
-    } catch (error) {
-      console.error("Deployment failed:", error);
-    } finally {
-      setIsDeploying(false);
-    }
-  };
-
-  const handleDeployUnified = async (e: React.FormEvent) => {
     if (!walletClient || !publicClient) throw new Error("Wallet client or public client not found");
     e.preventDefault();
-    setIsDeployingUnified(true);
+    setIsDeploying(true);
     try {
       if (!account.address) throw new Error("Account address not found");
 
@@ -261,7 +192,7 @@ export default function CreatePool() {
     } catch (error) {
       console.error("Unified SDK deployment failed:", error);
     } finally {
-      setIsDeployingUnified(false);
+      setIsDeploying(false);
     }
   };
 
@@ -337,16 +268,9 @@ export default function CreatePool() {
                 <Button 
                   type="submit" 
                   className="flex-1 bg-primary/90 hover:bg-primary/80"
-                  disabled={isDeployingUnified}
+                  disabled={isDeploying}
                 >
-                  Create Token (V4 SDK)
-                </Button>
-                <Button 
-                  onClick={handleDeployUnified}
-                  className="flex-1 bg-green-600/90 hover:bg-green-600/80"
-                  disabled={isDeployingUnified}
-                >
-                  {isDeployingUnified ? "Deploying..." : `Create ${auctionType === 'static' ? 'Static' : 'Dynamic'} Token (Unified SDK)`}
+                  {isDeploying ? "Deploying..." : `Create ${auctionType === 'static' ? 'Static' : 'Dynamic'} Token`}
                 </Button>
               </div>
               <Link to="/" className="block">

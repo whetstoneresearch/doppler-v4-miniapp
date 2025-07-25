@@ -6,20 +6,28 @@ import { Address, formatEther, maxUint256, parseEther, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
-import { DOPPLER_V4_ADDRESSES, dopplerAbi, universalRouterAbi } from "doppler-v4-sdk"
-import { getDrift } from "@/utils/drift"
 import { useAccount, usePublicClient, useBalance } from "wagmi"
 import { useWalletClient } from "wagmi"
-import { ReadQuoter } from "doppler-v4-sdk/dist/entities/quoter/ReadQuoter"
-// Unified SDK imports (not yet used)
-// @ts-ignore - Imports added for future migration
 import { 
   Quoter,
-  DynamicAuction,
-  getAddresses as getUnifiedAddresses,
-  type QuoteResult 
+  getAddresses,
+  dopplerHookAbi as dopplerAbi
 } from "doppler-sdk"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
+
+// Minimal ABI for UniversalRouter execute function
+const universalRouterAbi = [
+  {
+    name: "execute",
+    type: "function",
+    inputs: [
+      { name: "commands", type: "bytes", internalType: "bytes" },
+      { name: "inputs", type: "bytes[]", internalType: "bytes[]" }
+    ],
+    outputs: [],
+    stateMutability: "payable"
+  }
+] as const
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/")
@@ -77,7 +85,8 @@ export default function PoolDetails() {
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
-  const { v4Quoter, universalRouter } = DOPPLER_V4_ADDRESSES[chainId]
+  const addresses = getAddresses(chainId)
+  const { universalRouter } = addresses
 
   console.log(address)
 
@@ -103,10 +112,8 @@ export default function PoolDetails() {
   })
 
   const fetchQuote = async (amountIn: bigint) => {
-    if (!pool) return
-    const drift = getDrift(walletClient)
-    // @ts-ignore - Drift type mismatch between v4-sdk and unified sdk
-    const quoter = new ReadQuoter(v4Quoter, drift)
+    if (!pool || !publicClient) return
+    const quoter = new Quoter(publicClient as any, chainId)
 
     const poolKey = await publicClient?.readContract({
       address: address as Address,
@@ -116,12 +123,13 @@ export default function PoolDetails() {
 
     if (!poolKey) return
 
-    const key = {
-      currency0: poolKey[0],
-      currency1: poolKey[1],
-      fee: poolKey[2],
-      tickSpacing: poolKey[3],
-      hooks: poolKey[4],
+    // poolKey is already an object with the correct structure
+    const key = poolKey as {
+      currency0: Address
+      currency1: Address
+      fee: number
+      tickSpacing: number
+      hooks: Address
     }
 
     const zeroForOne = isBuying ? true : false
@@ -133,7 +141,7 @@ export default function PoolDetails() {
       hookData: "0x",
     })
 
-    return quote?.amountOut
+    return quote.amountOut
   }
 
   const executeSwap = async (amountIn: bigint) => {
@@ -149,12 +157,13 @@ export default function PoolDetails() {
 
     if (!poolKey) return
 
-    const key = {
-      currency0: poolKey[0],
-      currency1: poolKey[1],
-      fee: poolKey[2],
-      tickSpacing: poolKey[3],
-      hooks: poolKey[4],
+    // poolKey is already an object with the correct structure
+    const key = poolKey as {
+      currency0: Address
+      currency1: Address
+      fee: number
+      tickSpacing: number
+      hooks: Address
     }
 
     const zeroForOne = isBuying ? true : false
