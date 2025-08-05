@@ -30,7 +30,7 @@ const universalRouterAbi = [
 ] as const
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-const client = new GraphQLClient("https://doppler-v4-poc.ponder-dev.com/")
+const client = new GraphQLClient("https://doppler-sdk-w26w.marble.live/")
 
 const GET_POOL_QUERY = `
   query GetPool($address: String!, $chainId: BigInt!) {
