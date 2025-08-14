@@ -1,7 +1,7 @@
 import { GraphQLClient } from "graphql-request";
 
 // Initialize GraphQL client
-const client = new GraphQLClient("https://doppler-sdk-w26w.marble.live/");
+const client = new GraphQLClient("https://doppler-sdk-s1ck.marble.live/");
 // const client = new GraphQLClient("http://localhost:42069/");
 
 // Token type definition
@@ -27,21 +27,23 @@ export interface Pool {
   sqrtPrice: bigint;
   liquidity: bigint;
   createdAt: bigint;
-  asset: Asset;
+  asset: Asset | null;
   baseToken: Token;
   quoteToken: Token;
   price: bigint;
   fee: number;
   type: string;
   dollarLiquidity: bigint;
-  dailyVolume: DailyVolume;
+  dailyVolume: DailyVolume | null;
   volumeUsd: bigint;
   percentDayChange: number;
   totalFee0: bigint;
   totalFee1: bigint;
-  graduationPercentage: bigint;
+  graduationPercentage: number;
   graduationBalance: bigint;
   isToken0: boolean;
+  isContentCoin?: boolean;
+  isCreatorCoin?: boolean;
   lastRefreshed: bigint | null;
   lastSwapTimestamp: bigint | null;
   reserves0: bigint;
@@ -55,7 +57,15 @@ export interface Pools {
 // GraphQL query for fetching pools
 export const GET_POOLS_QUERY = `
   query GetPools {
-    pools(orderBy: "createdAt", orderDirection: "desc", where: { type: "v4" }) {
+    pools(
+      orderBy: "createdAt"
+      orderDirection: "desc"
+      where: { 
+        type: "v4",
+        isCreatorCoin: false,
+        isContentCoin: false
+      }
+    ) {
       items {
         address
         chainId
@@ -102,5 +112,6 @@ export const GET_POOLS_QUERY = `
 // Function to fetch pools using TanStack Query
 export const getPools = async (): Promise<Pools> => {
   const response = await client.request<{ pools: Pools }>(GET_POOLS_QUERY);
+  // Pools are now filtered at the GraphQL level, no client-side filtering needed
   return response.pools;
 };

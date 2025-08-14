@@ -41,7 +41,9 @@ function PoolCard({ pool }: { pool: Pool }) {
       
       <div className="grid grid-cols-2 gap-4 mb-4">
         <div>
-          <p className="text-lg font-medium">{formatNumber(BigInt(pool.dailyVolume.volumeUsd))}</p>
+          <p className="text-lg font-medium">
+            {pool.dailyVolume ? formatNumber(BigInt(pool.dailyVolume.volumeUsd)) : '$0'}
+          </p>
           <p className="text-sm text-muted-foreground">24h Volume</p>
         </div>
         <div>
@@ -54,12 +56,14 @@ function PoolCard({ pool }: { pool: Pool }) {
 
       <div className="grid grid-cols-2 gap-4 mb-4">
         <div>
-          <p className="text-lg font-medium">{formatNumber(BigInt(pool.asset.marketCapUsd))}</p>
+          <p className="text-lg font-medium">
+            {pool.asset ? formatNumber(BigInt(pool.asset.marketCapUsd)) : '$0'}
+          </p>
           <p className="text-sm text-muted-foreground">Market Cap</p>
         </div>
       </div>
 
-      <Link to={`/pool/${pool.address}`}>
+      <Link to={`/pool/${pool.address}?chainId=${pool.chainId}`}>
         <Button variant="secondary" className="w-full">View Details</Button>
       </Link>
     </div>

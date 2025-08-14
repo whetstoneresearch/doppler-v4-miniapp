@@ -56,14 +56,13 @@ export default function CreatePool() {
         // Use WETH address directly from unified SDK addresses
         const weth = addresses.v3.weth;
 
-        // Static auction configuration
+        // Build static auction configuration using the helper
         const staticConfig = factory.buildStaticAuctionConfig({
           name: formData.tokenName,
           symbol: formData.tokenSymbol,
           tokenURI: "", // Should be fetched from metadata service
           numeraire: weth,
           fee: 10000, // 1% fee tier (matches V3 SDK defaults)
-          // Use default V3 tick range from the SDK
           tickRange: { startTick: 175000, endTick: 225000 }, // V3 SDK defaults
           migration: {
             type: 'uniswapV2' as const
@@ -87,33 +86,31 @@ export default function CreatePool() {
         return;
       }
       
-      // Dynamic auction params (existing code)
-      const unifiedSDKParams = {
-        userAddress: account.address,
-        token: {
-          name: formData.tokenName,
-          symbol: formData.tokenSymbol,
-          tokenURI: "",
-          yearlyMintRate: 0n,
-        },
-        sale: {
-          initialSupply: BigInt("1000000000000000000000000000"), // 1 billion tokens
-          numTokensToSell: BigInt("900000000000000000000000000"), // 900 million tokens
-          numeraire: "0x0000000000000000000000000000000000000000" as `0x${string}`, // ETH
-        },
-        auction: {
-          duration: 7, // 7 days
-          epochLength: 3600, // 1 hour
-          startTick: 180000,
-          endTick: 190000,
-          minProceeds: BigInt("100000000000000000000"), // 100 ETH
-          maxProceeds: BigInt("600000000000000000000"), // 600 ETH
-          numPdSlugs: 5,
-        },
-        pool: {
-          fee: 3000, // 0.3% fee tier
-          tickSpacing: 8, // Match V4 SDK tick spacing from poolConfig.ts
-        },
+      // Dynamic auction configuration
+      // Get block timestamp first
+      const block = await getBlock(publicClient);
+      const adjustedTimestamp = block.timestamp + 300n; // Add 5 minutes
+      
+      // Build dynamic auction configuration using the helper
+      // This provides sensible defaults and handles complex calculations
+      const dynamicConfig = factory.buildDynamicAuctionConfig({
+        name: formData.tokenName,
+        symbol: formData.tokenSymbol,
+        tokenURI: "",
+        totalSupply: BigInt("1000000000000000000000000000"), // 1 billion tokens
+        numTokensToSell: BigInt("900000000000000000000000000"), // 900 million tokens
+        recipients: [], // No vesting
+        amounts: [],
+        vestingDuration: 0n,
+        yearlyMintRate: 0n,
+        tickRange: { startTick: 180000, endTick: 190000 },
+        duration: 7, // 7 days
+        epochLength: 3600, // 1 hour epochs
+        tickSpacing: 8, // Match V4 SDK tick spacing
+        fee: 3000, // 0.3% fee tier
+        minProceeds: BigInt("100000000000000000000"), // 100 ETH
+        maxProceeds: BigInt("600000000000000000000"), // 600 ETH
+        blockTimestamp: Number(adjustedTimestamp),
         migration: {
           type: 'uniswapV4' as const,
           fee: 3000,
@@ -132,56 +129,20 @@ export default function CreatePool() {
             ]
           }
         },
-        governance: {
-          initialVotingDelay: 7200, // 2 hours
-          initialVotingPeriod: 50400, // 14 hours
-          initialProposalThreshold: 0n,
-        },
+        useGovernance: true,
         integrator: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-      };
+      }, account.address);
       
-      // Log unified SDK arguments
-      console.log("=== UNIFIED SDK DEPLOYMENT ARGUMENTS ===");
-      console.log("Unified SDK Params:", JSON.stringify(unifiedSDKParams, (_key, value) => 
+      console.log("=== UNIFIED SDK DYNAMIC AUCTION DEPLOYMENT ===");
+      console.log("Dynamic Config:", JSON.stringify(dynamicConfig, (_key, value) => 
         typeof value === 'bigint' ? value.toString() : value, 2));
       console.log("Airlock Owner:", airlockOwner);
       console.log("Chain ID:", 84532);
       console.log("Current Address:", account.address);
+      console.log("==============================================");
       
-      // Get block timestamp first (same as V4 SDK)
-      const block = await getBlock(publicClient);
-      const adjustedTimestamp = block.timestamp + 300n; // Add 5 minutes
-      
-      // Build config first to get all params
-      const buildConfig = factory.buildDynamicAuctionConfig({
-        name: formData.tokenName,
-        symbol: formData.tokenSymbol,
-        tokenURI: "",
-        totalSupply: BigInt("1000000000000000000000000000"),
-        numTokensToSell: BigInt("900000000000000000000000000"),
-        recipients: [],
-        amounts: [],
-        vestingDuration: 0n,
-        yearlyMintRate: 0n,
-        tickRange: { startTick: 180000, endTick: 190000 },
-        duration: 7,
-        epochLength: 3600,
-        tickSpacing: 8, // Match V4 SDK tick spacing
-        fee: 3000,
-        minProceeds: BigInt("100000000000000000000"),
-        maxProceeds: BigInt("600000000000000000000"),
-        blockTimestamp: Number(adjustedTimestamp), // Pass the adjusted timestamp (like V4 SDK)
-        // The unified SDK will add 30 seconds to this, just like V4 SDK does
-        migration: unifiedSDKParams.migration,
-        useGovernance: true,
-      }, account.address);
-      
-      console.log("Built Config:", JSON.stringify(buildConfig, (_key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
-      console.log("========================================");
-      
-      // Create dynamic auction using unified SDK with the built config
-      const result = await factory.createDynamicAuction(buildConfig);
+      // Create dynamic auction using the built config
+      const result = await factory.createDynamicAuction(dynamicConfig);
       
       console.log("Unified SDK deployment completed!");
       console.log("Transaction hash:", result.transactionHash);
