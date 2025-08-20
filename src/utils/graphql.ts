@@ -73,7 +73,7 @@ export interface Pools {
   items: Pool[];
 }
 
-// GraphQL query for fetching pools
+// GraphQL query for fetching pools (both v3 static and v4 dynamic auctions)
 export const GET_POOLS_QUERY = `
   query GetPools {
     pools(
@@ -81,6 +81,7 @@ export const GET_POOLS_QUERY = `
       orderDirection: "desc"
       limit: 25
       where: {
+        type_in: ["v3", "v4"]
         isCreatorCoin: false
         isContentCoin: false
       }
