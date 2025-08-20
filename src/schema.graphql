@@ -1590,6 +1590,130 @@ type poolPage {
   totalCount: Int!
 }
 
+# ==========================
+# V4 pools from v3 indexer
+# ==========================
+
+extend type Query {
+  v4pools(poolId: String!, chainId: BigInt!): v4pools
+  v4poolss(
+    where: v4poolsFilter
+    orderBy: String
+    orderDirection: String
+    before: String
+    after: String
+    limit: Int
+  ): v4poolsPage!
+}
+
+type v4pools {
+  poolId: String!
+  chainId: BigInt!
+  currency0: String!
+  currency1: String!
+  fee: Int!
+  tickSpacing: Int!
+  hooks: String!
+  sqrtPriceX96: BigInt!
+  liquidity: BigInt!
+  tick: Int!
+  baseToken: token
+  quoteToken: token
+  asset: asset
+  migratedFromPool: pool
+  migratedAt: BigInt!
+  migratorVersion: String!
+  price: BigInt!
+  volumeUsd: BigInt!
+  dollarLiquidity: BigInt!
+  totalFee0: BigInt!
+  totalFee1: BigInt!
+  reserves0: BigInt!
+  reserves1: BigInt!
+  createdAt: BigInt!
+  lastRefreshed: BigInt
+  lastSwapTimestamp: BigInt
+  percentDayChange: Float!
+  dailyVolume: dailyVolume
+  isToken0: Boolean!
+  isQuoteEth: Boolean!
+}
+
+type v4poolsPage {
+  items: [v4pools!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+input v4poolsFilter {
+  AND: [v4poolsFilter]
+  OR: [v4poolsFilter]
+  poolId: String
+  poolId_not: String
+  poolId_in: [String]
+  poolId_not_in: [String]
+  poolId_contains: String
+  poolId_not_contains: String
+  poolId_starts_with: String
+  poolId_ends_with: String
+  poolId_not_starts_with: String
+  poolId_not_ends_with: String
+  chainId: BigInt
+  chainId_not: BigInt
+  chainId_in: [BigInt]
+  chainId_not_in: [BigInt]
+  chainId_gt: BigInt
+  chainId_lt: BigInt
+  chainId_gte: BigInt
+  chainId_lte: BigInt
+  currency0: String
+  currency0_not: String
+  currency0_in: [String]
+  currency0_not_in: [String]
+  currency0_contains: String
+  currency0_not_contains: String
+  currency0_starts_with: String
+  currency0_ends_with: String
+  currency0_not_starts_with: String
+  currency0_not_ends_with: String
+  currency1: String
+  currency1_not: String
+  currency1_in: [String]
+  currency1_not_in: [String]
+  currency1_contains: String
+  currency1_not_contains: String
+  currency1_starts_with: String
+  currency1_ends_with: String
+  currency1_not_starts_with: String
+  currency1_not_ends_with: String
+  fee: Int
+  fee_not: Int
+  fee_in: [Int]
+  fee_not_in: [Int]
+  fee_gt: Int
+  fee_lt: Int
+  fee_gte: Int
+  fee_lte: Int
+  tickSpacing: Int
+  tickSpacing_not: Int
+  tickSpacing_in: [Int]
+  tickSpacing_not_in: [Int]
+  tickSpacing_gt: Int
+  tickSpacing_lt: Int
+  tickSpacing_gte: Int
+  tickSpacing_lte: Int
+  hooks: String
+  hooks_not: String
+  hooks_in: [String]
+  hooks_not_in: [String]
+  hooks_contains: String
+  hooks_not_contains: String
+  hooks_starts_with: String
+  hooks_ends_with: String
+  hooks_not_starts_with: String
+  hooks_not_ends_with: String
+}
+
 input poolFilter {
   AND: [poolFilter]
   OR: [poolFilter]
