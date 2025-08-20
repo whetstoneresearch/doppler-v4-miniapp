@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import AllPools from './pages/AllPools'
 import CreatePool from './pages/CreatePool'
 import PoolDetails from './pages/PoolDetails'
+import QuoteDebug from './pages/QuoteDebug'
 import { Navbar } from './components/ui/navbar'
 
 const queryClient = new QueryClient()
@@ -22,6 +23,7 @@ function App() {
                   <Route path="/" element={<AllPools />} />
                   <Route path="/create" element={<CreatePool />} />
                   <Route path="/pool/:address" element={<PoolDetails />} />
+                  <Route path="/debug/quote" element={<QuoteDebug />} />
                 </Routes>
               </main>
             </div>

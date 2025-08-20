@@ -3,8 +3,8 @@ import { Link } from "react-router-dom"
 import { useState } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
 import { getAddresses } from "@/utils/getAddresses"
-import { DopplerSDK } from "doppler-sdk"
-import { PublicClient } from "viem"
+import { DopplerSDK, StaticAuctionBuilder, DynamicAuctionBuilder } from "@whetstone-research/doppler-sdk"
+import { PublicClient, parseEther } from "viem"
 import { getBlock } from "viem/actions"
 
 export default function CreatePool() {
@@ -13,8 +13,6 @@ export default function CreatePool() {
   const publicClient = usePublicClient() as PublicClient
   const [isDeploying, setIsDeploying] = useState(false)
   const [auctionType, setAuctionType] = useState<'static' | 'dynamic'>('dynamic')
-
-  const addresses = getAddresses(84532)
 
   const [formData, setFormData] = useState({
     tokenName: '',
@@ -31,14 +29,15 @@ export default function CreatePool() {
 
       // Use the unified SDK
       const sdk = new DopplerSDK({
-        walletClient: walletClient as any, // Cast to any to avoid viem version mismatch
-        publicClient: publicClient as any, // Cast to any to avoid viem version mismatch
+        walletClient: walletClient,
+        publicClient: publicClient,
         chainId: 84532, // Base Sepolia
       });
 
       const factory = sdk.factory;
+      const addresses = getAddresses(84532);
       
-      // Get airlock owner address
+      // Get airlock owner address for dynamic auction fee streaming
       const airlockOwner = await publicClient.readContract({
         address: addresses.v4.airlock,
         abi: [{
@@ -51,34 +50,44 @@ export default function CreatePool() {
         functionName: 'owner',
       }) as `0x${string}`;
       
-      // Handle both static and dynamic auctions
+      // Handle both static and dynamic auctions using the new builder pattern
       if (auctionType === 'static') {
-        // Use WETH address directly from unified SDK addresses
+        // Use WETH address directly from addresses
         const weth = addresses.v3.weth;
 
-        // Build static auction configuration using the helper
-        const staticConfig = factory.buildStaticAuctionConfig({
-          name: formData.tokenName,
-          symbol: formData.tokenSymbol,
-          tokenURI: "", // Should be fetched from metadata service
-          numeraire: weth,
-          fee: 10000, // 1% fee tier (matches V3 SDK defaults)
-          tickRange: { startTick: 175000, endTick: 225000 }, // V3 SDK defaults
-          migration: {
+        // Build static auction using the new builder pattern
+        const staticParams = new StaticAuctionBuilder()
+          .tokenConfig({
+            name: formData.tokenName,
+            symbol: formData.tokenSymbol,
+            tokenURI: "", // Should be fetched from metadata service
+          })
+          .saleConfig({
+            initialSupply: parseEther("1000000000"), // 1 billion tokens
+            numTokensToSell: parseEther("900000000"), // 900 million tokens
+            numeraire: weth,
+          })
+          .poolByTicks({
+            startTick: 175000,
+            endTick: 225000,
+            fee: 10000, // 1% fee tier
+          })
+          .withMigration({
             type: 'uniswapV2' as const
-          },
-          integrator: account.address,
-        }, account.address);
+          })
+          .withUserAddress(account.address)
+          .withIntegrator(account.address)
+          .build();
         
-        console.log("=== UNIFIED SDK STATIC AUCTION DEPLOYMENT ===");
-        console.log("Static Config:", JSON.stringify(staticConfig, (_key, value) => 
+        console.log("=== STATIC AUCTION DEPLOYMENT (New Builder) ===");
+        console.log("Static Params:", JSON.stringify(staticParams, (_key, value) => 
           typeof value === 'bigint' ? value.toString() : value, 2));
-        console.log("=========================================");
+        console.log("==============================================");
         
         // Create static auction
-        const result = await factory.createStaticAuction(staticConfig);
+        const result = await factory.createStaticAuction(staticParams);
         
-        console.log("Unified SDK static auction deployment completed!");
+        console.log("Static auction deployment completed!");
         console.log("Transaction hash:", result.transactionHash);
         console.log("Token address:", result.tokenAddress);
         console.log("Pool address:", result.poolAddress);
@@ -86,32 +95,35 @@ export default function CreatePool() {
         return;
       }
       
-      // Dynamic auction configuration
+      // Dynamic auction configuration using the new builder pattern
       // Get block timestamp first
       const block = await getBlock(publicClient);
       const adjustedTimestamp = block.timestamp + 300n; // Add 5 minutes
       
-      // Build dynamic auction configuration using the helper
-      // This provides sensible defaults and handles complex calculations
-      const dynamicConfig = factory.buildDynamicAuctionConfig({
-        name: formData.tokenName,
-        symbol: formData.tokenSymbol,
-        tokenURI: "",
-        totalSupply: BigInt("1000000000000000000000000000"), // 1 billion tokens
-        numTokensToSell: BigInt("900000000000000000000000000"), // 900 million tokens
-        recipients: [], // No vesting
-        amounts: [],
-        vestingDuration: 0n,
-        yearlyMintRate: 0n,
-        tickRange: { startTick: 180000, endTick: 190000 },
-        duration: 7, // 7 days
-        epochLength: 3600, // 1 hour epochs
-        tickSpacing: 8, // Match V4 SDK tick spacing
-        fee: 3000, // 0.3% fee tier
-        minProceeds: BigInt("100000000000000000000"), // 100 ETH
-        maxProceeds: BigInt("600000000000000000000"), // 600 ETH
-        blockTimestamp: Number(adjustedTimestamp),
-        migration: {
+      // Build dynamic auction using the new builder pattern
+      const dynamicParams = new DynamicAuctionBuilder()
+        .tokenConfig({
+          name: formData.tokenName,
+          symbol: formData.tokenSymbol,
+          tokenURI: "",
+        })
+        .saleConfig({
+          initialSupply: parseEther("1000000000"), // 1 billion tokens
+          numTokensToSell: parseEther("900000000"), // 900 million tokens
+        })
+        .poolConfig({
+          fee: 3000, // 0.3% fee tier
+          tickSpacing: 8, // Match V4 tick spacing
+        })
+        .auctionByTicks({
+          startTick: 180000,
+          endTick: 190000,
+          minProceeds: parseEther("100"), // 100 ETH
+          maxProceeds: parseEther("600"), // 600 ETH
+          durationDays: 7, // 7 days
+          epochLength: 3600, // 1 hour epochs
+        })
+        .withMigration({
           type: 'uniswapV4' as const,
           fee: 3000,
           tickSpacing: 60,
@@ -128,30 +140,34 @@ export default function CreatePool() {
               }
             ]
           }
-        },
-        useGovernance: true,
-        integrator: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-      }, account.address);
+        })
+        .withGovernance({ useDefaults: true })
+        .withUserAddress(account.address)
+        .withIntegrator() // Uses zero address by default
+        .withTime({
+          blockTimestamp: Number(adjustedTimestamp),
+        })
+        .build();
       
-      console.log("=== UNIFIED SDK DYNAMIC AUCTION DEPLOYMENT ===");
-      console.log("Dynamic Config:", JSON.stringify(dynamicConfig, (_key, value) => 
+      console.log("=== DYNAMIC AUCTION DEPLOYMENT (New Builder) ===");
+      console.log("Dynamic Params:", JSON.stringify(dynamicParams, (_key, value) => 
         typeof value === 'bigint' ? value.toString() : value, 2));
       console.log("Airlock Owner:", airlockOwner);
       console.log("Chain ID:", 84532);
       console.log("Current Address:", account.address);
-      console.log("==============================================");
+      console.log("================================================");
       
       // Create dynamic auction using the built config
-      const result = await factory.createDynamicAuction(dynamicConfig);
+      const result = await factory.createDynamicAuction(dynamicParams);
       
-      console.log("Unified SDK deployment completed!");
+      console.log("Dynamic auction deployment completed!");
       console.log("Transaction hash:", result.transactionHash);
       console.log("Token address:", result.tokenAddress);
       console.log("Hook address:", result.hookAddress);
       console.log("Pool ID:", result.poolId);
 
     } catch (error) {
-      console.error("Unified SDK deployment failed:", error);
+      console.error("Auction deployment failed:", error);
     } finally {
       setIsDeploying(false);
     }
@@ -216,13 +232,6 @@ export default function CreatePool() {
                 maxLength={6}
               />
               <p className="text-xs text-muted-foreground">Maximum 6 characters, automatically converted to uppercase</p>
-            </div>
-            <div className="mt-6 p-4 border border-yellow-500/30 rounded-lg bg-yellow-500/5">
-              <p className="text-sm text-yellow-600 mb-2">Choose your deployment method:</p>
-              <ul className="text-xs text-muted-foreground space-y-1">
-                <li>• <strong>V4 SDK</strong>: Uses the existing V4-specific SDK (dynamic auctions only)</li>
-                <li>• <strong>Unified SDK</strong>: Supports both static (V3) and dynamic (V4) auctions</li>
-              </ul>
             </div>
             <div className="space-y-4 pt-4">
               <div className="flex gap-4">

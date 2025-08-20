@@ -100,7 +100,14 @@ export default function AllPools() {
 
   return (
     <div className="p-8">
-      <h1 className="text-4xl font-bold mb-8 text-primary">Active Pools</h1>
+      <div className="flex items-center justify-between mb-8">
+        <h1 className="text-4xl font-bold text-primary">Active Pools</h1>
+        <div className="flex items-center gap-2">
+          <Link to="/debug/quote">
+            <Button variant="outline">Quote Debugger</Button>
+          </Link>
+        </div>
+      </div>
       <div className="grid gap-6">
         {pools?.items?.map((pool) => (
           <PoolCard key={pool.address} pool={pool} />
