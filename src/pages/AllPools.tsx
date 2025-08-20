@@ -32,6 +32,9 @@ function PoolCard({ pool }: { pool: Pool }) {
           <p className="text-muted-foreground">
             {pool.baseToken.name} / {pool.quoteToken.name}
           </p>
+          <div className="inline-flex items-center mt-2 px-2 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
+            {pool.type === 'v4' ? '🚀 Dynamic' : '📊 Static'}
+          </div>
         </div>
         <div className="text-right">
           <p className="text-lg font-medium">{formatNumber(pool.dollarLiquidity)}</p>
