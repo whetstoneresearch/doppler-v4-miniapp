@@ -465,6 +465,9 @@ export default function PoolDetails() {
             <p className="text-muted-foreground">
               {pool.baseToken.name} / {pool.quoteToken.name}
             </p>
+            <div className="inline-flex items-center mt-2 px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
+              {pool.type === 'v4' ? '🚀 Dynamic Auction' : '📊 Static Auction'}
+            </div>
           </div>
           <div className="text-right">
             <p className="text-lg font-medium">{formatNumber(pool.dollarLiquidity)}</p>
@@ -502,8 +505,8 @@ export default function PoolDetails() {
               <p className="text-lg">{pool.fee === 8388608 ? 'Dynamic' : `${(pool.fee / 10000).toFixed(2)}%`}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Type</p>
-              <p className="text-lg">{pool.type}</p>
+              <p className="text-sm text-muted-foreground">Auction Type</p>
+              <p className="text-lg">{pool.type === 'v4' ? 'Dynamic (V4)' : 'Static (V3)'}</p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Created</p>
