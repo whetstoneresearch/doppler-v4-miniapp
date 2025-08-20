@@ -11,10 +11,7 @@ import { useWalletClient } from "wagmi"
 import { 
   Quoter,
   getAddresses,
-  dopplerHookAbi,
-  dopplerLensAbi,
-  DYNAMIC_FEE_FLAG
-} from "doppler-sdk"
+} from "@whetstone-research/doppler-sdk"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 
 // Minimal ABI for UniversalRouter execute function
@@ -36,43 +33,41 @@ const client = new GraphQLClient("https://doppler-sdk-s1ck.marble.live/")
 
 const GET_POOL_QUERY = `
   query GetPool($address: String!, $chainId: BigInt!) {
-    pool(address: $address, chainId: $chainId) {
-      address
-      chainId
-      tick
-      sqrtPrice
-      liquidity
-      createdAt
-      baseToken {
+    pools(
+      where: { address: $address, chainId: $chainId }
+      limit: 1
+    ) {
+      items {
         address
-        name
-        symbol
-      }
-      quoteToken {
-        address
-        name
-        symbol
-      }
-      price
-      fee
-      type
-      dollarLiquidity
-      dailyVolume {
+        chainId
+        tick
+        sqrtPrice
+        liquidity
+        createdAt
+        baseToken { address name symbol }
+        quoteToken { address name symbol }
+        price
+        fee
+        type
+        dollarLiquidity
+        dailyVolume { volumeUsd }
         volumeUsd
-      }
-      volumeUsd
-      percentDayChange
-      totalFee0
-      totalFee1
-      graduationPercentage
-      graduationBalance
-      isToken0
-      lastRefreshed
-      lastSwapTimestamp
-      reserves0
-      reserves1
-      asset {
-        marketCapUsd
+        percentDayChange
+        totalFee0
+        totalFee1
+        isToken0
+        isCreatorCoin
+        isContentCoin
+        lastRefreshed
+        lastSwapTimestamp
+        reserves0
+        reserves1
+        asset {
+          marketCapUsd
+          migrated
+          migratedAt
+          v2Pool
+        }
       }
     }
   }
@@ -98,12 +93,59 @@ export default function PoolDetails() {
     queryKey: ['pool', address, chainId],
     queryFn: async () => {
       console.log('Fetching pool with:', { address, chainId })
-      const response = await client.request<{ pool: Pool }>(GET_POOL_QUERY, {
+      const response = await client.request<{ pools: { items: any[] } }>(GET_POOL_QUERY, {
         address,
         chainId,
       })
-      console.log('Pool response:', response)
-      return response.pool
+      console.log('Full pool GraphQL response:', response)
+      const p = response.pools.items?.[0]
+      if (!p) return undefined as any
+      // Normalize into Pool shape used by UI
+      const normalized: Pool = {
+        address: p.address,
+        chainId: BigInt(p.chainId),
+        tick: p.tick,
+        sqrtPrice: BigInt(p.sqrtPrice),
+        liquidity: BigInt(p.liquidity),
+        createdAt: BigInt(p.createdAt),
+        baseToken: p.baseToken,
+        quoteToken: p.quoteToken,
+        price: BigInt(p.price),
+        fee: p.fee,
+        type: p.type || 'v3',
+        dollarLiquidity: BigInt(p.dollarLiquidity),
+        dailyVolume: p.dailyVolume ? { volumeUsd: BigInt(p.dailyVolume.volumeUsd) } : null,
+        asset: p.asset ? {
+          marketCapUsd: BigInt(p.asset.marketCapUsd),
+          migrated: p.asset.migrated,
+          migratedAt: p.asset.migratedAt ? BigInt(p.asset.migratedAt) : undefined,
+          v2Pool: p.asset.v2Pool ?? undefined,
+        } : null,
+        volumeUsd: BigInt(p.volumeUsd),
+        percentDayChange: p.percentDayChange,
+        totalFee0: BigInt(p.totalFee0),
+        totalFee1: BigInt(p.totalFee1),
+        isToken0: p.isToken0,
+        isCreatorCoin: p.isCreatorCoin || false,
+        isContentCoin: p.isContentCoin || false,
+        lastRefreshed: p.lastRefreshed ? BigInt(p.lastRefreshed) : null,
+        lastSwapTimestamp: p.lastSwapTimestamp ? BigInt(p.lastSwapTimestamp) : null,
+        reserves0: BigInt(p.reserves0),
+        reserves1: BigInt(p.reserves1),
+        // V4 pools might have poolKey data
+        poolKey: p.currency0 ? {
+          currency0: p.currency0,
+          currency1: p.currency1,
+          fee: p.fee,
+          tickSpacing: p.tickSpacing,
+          hooks: p.hooks || p.address,
+        } : undefined,
+        currency0: p.currency0,
+        currency1: p.currency1,
+        tickSpacing: p.tickSpacing,
+        hooks: p.hooks || p.address,
+      }
+      return normalized
     },
   })
 
@@ -126,22 +168,81 @@ export default function PoolDetails() {
     return address
   }
 
-  // Helper function to sort currencies for poolKey (currency0 < currency1)
-  const sortCurrencies = (currencyA: Address, currencyB: Address): [Address, Address] => {
-    const addrA = getCurrencyAddress(currencyA)
-    const addrB = getCurrencyAddress(currencyB)
-    
-    // Convert to BigInt for comparison
-    const a = BigInt(addrA)
-    const b = BigInt(addrB)
-    
-    return a < b ? [addrA, addrB] : [addrB, addrA]
+  // Uniswap v4 Quoter ABI (minimal)
+  const uniswapV4QuoterAbi = [
+    {
+      name: "quoteExactInputSingle",
+      type: "function",
+      stateMutability: "view",
+      inputs: [
+        {
+          name: "key",
+          type: "tuple",
+          components: [
+            { name: "currency0", type: "address" },
+            { name: "currency1", type: "address" },
+            { name: "fee", type: "uint24" },
+            { name: "tickSpacing", type: "int24" },
+            { name: "hooks", type: "address" },
+          ],
+        },
+        { name: "zeroForOne", type: "bool" },
+        { name: "exactAmount", type: "uint256" },
+        { name: "hookData", type: "bytes" },
+      ],
+      outputs: [
+        { name: "amountOut", type: "uint256" },
+      ],
+    },
+  ] as const
+
+  const resolveV4QuoterAddress = (): Address | undefined => {
+    const a: any = addresses
+    return (
+      a?.v4Quoter ||
+      a?.uniswapV4Quoter ||
+      a?.quoter ||
+      a?.v4?.quoter // in case nested structure
+    ) as Address | undefined
   }
+
+  // (currency sorting helper removed; rely on indexer isToken0)
 
   const fetchQuote = async (amountIn: bigint) => {
     if (!pool || !publicClient) return
     
     console.log('Pool type:', pool.type, 'Pool data:', pool)
+    console.log('Asset migrated status:', pool.asset?.migrated)
+    
+    // Check if the pool has migrated to V2
+    const isMigrated = pool.asset?.migrated === true
+    
+    if (isMigrated && pool.asset?.v2Pool) {
+      // Handle migrated V2 pools
+      try {
+        const quoter = new Quoter(publicClient, chainId)
+        
+        // For V2 pools, we use a simple path
+        const baseTokenAddress = getCurrencyAddress(pool.baseToken.address as Address)
+        const quoteTokenAddress = getCurrencyAddress(pool.quoteToken.address as Address)
+        
+        // Build the path based on whether we're buying or selling
+        const path = isBuying 
+          ? [quoteTokenAddress, baseTokenAddress]  // Swap quote for base (buying)
+          : [baseTokenAddress, quoteTokenAddress]  // Swap base for quote (selling)
+        
+        const amounts = await quoter.quoteExactInputV2({
+          amountIn: amountIn,
+          path: path,
+        })
+        
+        // The output amount is the last element in the amounts array
+        return amounts[amounts.length - 1]
+      } catch (error) {
+        console.error("Error fetching V2 quote:", error)
+        return null
+      }
+    }
     
     // Check if this is a V4 pool with a hook
     // V4 pools may have type as "v4" (lowercase), "V4", "DynamicAuction", etc.
@@ -149,72 +250,47 @@ export default function PoolDetails() {
     const isV4Pool = poolType === "v4" || poolType === "dynamicauction" || 
                      poolType === "hook" || !pool.type // If type is missing, assume V4
     
-    if (isV4Pool) {
+    if (isV4Pool && !isMigrated) {
       try {
-        // First, try to read poolKey from the hook contract
-        const poolKeyArray = await publicClient?.readContract({
-          address: address as Address,
-          abi: dopplerHookAbi,
-          functionName: "poolKey",
-        }).catch(() => null)
-
-        let key: {
-          currency0: Address
-          currency1: Address
-          fee: number
-          tickSpacing: number
-          hooks: Address
-        }
-
-        if (!poolKeyArray) {
-          // If poolKey doesn't exist, construct it from pool data
-          // Ensure proper currency sorting and WETH address usage
-          const [currency0, currency1] = sortCurrencies(
-            pool.baseToken.address as Address,
-            pool.quoteToken.address as Address
-          )
-          
-          key = {
-            currency0,
-            currency1,
-            fee: pool.fee || 3000, // Default fee if not provided
-            tickSpacing: 60, // Default tick spacing for 0.3% fee
-            hooks: address as Address // The pool address is the hook address
-          }
-        } else {
-          // poolKey is returned as an array from the contract
-          // Still need to ensure WETH is used instead of zero address
-          const currency0 = getCurrencyAddress(poolKeyArray[0])
-          const currency1 = getCurrencyAddress(poolKeyArray[1])
-          
-          key = {
-            currency0,
-            currency1,
-            fee: poolKeyArray[2],
-            tickSpacing: poolKeyArray[3],
-            hooks: poolKeyArray[4],
-          }
+        // Use PoolKey directly from indexer data
+        const key = {
+          currency0: pool.currency0 as Address,
+          currency1: pool.currency1 as Address,
+          fee: pool.fee || 3000,
+          tickSpacing: pool.tickSpacing || 60,
+          hooks: (pool.hooks || address) as Address,
         }
 
         // Determine zeroForOne based on which token we're swapping from
         // We need to check if we're swapping from currency0 to currency1 or vice versa
-        const baseTokenAddress = getCurrencyAddress(pool.baseToken.address as Address)
-        const quoteTokenAddress = getCurrencyAddress(pool.quoteToken.address as Address)
-        
-        const zeroForOne = isBuying 
-          ? key.currency0 === quoteTokenAddress  // Buying base with quote
-          : key.currency0 === baseTokenAddress   // Selling base for quote
-        
-        // Use the Quoter class from the unified SDK
-        const quoter = new Quoter(publicClient as any, chainId)
-        const quote = await quoter.quoteExactInputV4({
-          poolKey: key,
-          zeroForOne: zeroForOne,
-          exactAmount: amountIn,
-          hookData: "0x",
+        const zeroForOne = isBuying
+          ? key.currency0.toLowerCase() === (pool.quoteToken.address as Address).toLowerCase() // quote -> base
+          : key.currency0.toLowerCase() === (pool.baseToken.address as Address).toLowerCase()  // base -> quote
+
+        // Prefer direct Uniswap v4 Quoter call
+        const v4QuoterAddress = resolveV4QuoterAddress()
+        if (!v4QuoterAddress) {
+          console.warn("v4 Quoter address not found in addresses; falling back to SDK Quoter")
+          const quoter = new Quoter(publicClient, chainId)
+          const quote = await quoter.quoteExactInputV4({
+            poolKey: key,
+            zeroForOne,
+            exactAmount: amountIn,
+            hookData: "0x",
+          })
+          return quote.amountOut
+        }
+
+        console.log('Using Uniswap v4 Quoter:', v4QuoterAddress)
+        console.log('quote params', { key, zeroForOne, amountIn: amountIn.toString(), hookData: '0x' })
+        const result: any = await publicClient.readContract({
+          address: v4QuoterAddress,
+          abi: uniswapV4QuoterAbi,
+          functionName: "quoteExactInputSingle",
+          args: [key, zeroForOne, amountIn, "0x"],
         })
-        
-        return quote.amountOut
+        const amountOut: bigint = typeof result === 'bigint' ? result : (result?.amountOut as bigint)
+        return amountOut
       } catch (error) {
         console.error("Error fetching V4 quote:", error)
         return null
@@ -231,67 +307,40 @@ export default function PoolDetails() {
     if (!pool) return
     if (!account.address || !walletClient) throw new Error("account must be connected");
 
+    // Check if the pool has migrated to V2
+    const isMigrated = pool.asset?.migrated === true
+    
+    if (isMigrated && pool.asset?.v2Pool) {
+      // Handle migrated V2 pools
+      console.log("Executing V2 swap for migrated pool")
+      // For V2 swaps, we would need to use a different router approach
+      // This would require implementing V2 swap commands with the UniversalRouter
+      // For now, we'll throw an informative error
+      throw new Error("V2 swap execution not yet implemented for migrated pools. Please use the main Pure Markets interface.")
+    }
+
     // Check if this is a V4 pool
     // V4 pools may have type as "v4" (lowercase), "V4", "DynamicAuction", etc.
     const poolType = pool.type?.toLowerCase()
     const isV4Pool = poolType === "v4" || poolType === "dynamicauction" || 
                      poolType === "hook" || !pool.type // If type is missing, assume V4
     
-    if (isV4Pool) {
+    if (isV4Pool && !isMigrated) {
       try {
-        // Try to read poolKey from the hook contract
-        const poolKeyArray = await publicClient?.readContract({
-          address: address as Address,
-          abi: dopplerHookAbi,
-          functionName: "poolKey",
-        }).catch(() => null)
-
-        let key: {
-          currency0: Address
-          currency1: Address
-          fee: number
-          tickSpacing: number
-          hooks: Address
-        }
-
-        if (!poolKeyArray) {
-          // If poolKey doesn't exist, construct it from pool data
-          // Ensure proper currency sorting and WETH address usage
-          const [currency0, currency1] = sortCurrencies(
-            pool.baseToken.address as Address,
-            pool.quoteToken.address as Address
-          )
-          
-          key = {
-            currency0,
-            currency1,
-            fee: pool.fee || 3000, // Default fee if not provided
-            tickSpacing: 60, // Default tick spacing for 0.3% fee
-            hooks: address as Address // The pool address is the hook address
-          }
-        } else {
-          // poolKey is returned as an array from the contract
-          // Still need to ensure WETH is used instead of zero address
-          const currency0 = getCurrencyAddress(poolKeyArray[0])
-          const currency1 = getCurrencyAddress(poolKeyArray[1])
-          
-          key = {
-            currency0,
-            currency1,
-            fee: poolKeyArray[2],
-            tickSpacing: poolKeyArray[3],
-            hooks: poolKeyArray[4],
-          }
+        // Use PoolKey directly from indexer data
+        const key = {
+          currency0: pool.currency0 as Address,
+          currency1: pool.currency1 as Address,
+          fee: pool.fee || 3000,
+          tickSpacing: pool.tickSpacing || 60,
+          hooks: (pool.hooks || address) as Address,
         }
 
         // Determine zeroForOne based on which token we're swapping from
         // We need to check if we're swapping from currency0 to currency1 or vice versa
-        const baseTokenAddress = getCurrencyAddress(pool.baseToken.address as Address)
-        const quoteTokenAddress = getCurrencyAddress(pool.quoteToken.address as Address)
-        
         const zeroForOne = isBuying 
-          ? key.currency0 === quoteTokenAddress  // Buying base with quote
-          : key.currency0 === baseTokenAddress   // Selling base for quote
+          ? key.currency0.toLowerCase() === (pool.quoteToken.address as Address).toLowerCase()
+          : key.currency0.toLowerCase() === (pool.baseToken.address as Address).toLowerCase()
 
         const actionBuilder = new V4ActionBuilder()
         const [actions, params] = actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, 0n, "0x")
