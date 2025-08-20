@@ -10,7 +10,7 @@ import {
 import {
   DERC20Bytecode,
   DopplerBytecode
-} from "doppler-sdk";
+} from "@whetstone-research/doppler-sdk";
 
 const FLAG_MASK = BigInt(0x3fff);
 

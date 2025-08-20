@@ -1,5 +1,5 @@
 // Using unified SDK for all addresses
-import { getAddresses as getUnifiedAddresses } from "doppler-sdk";
+import { getAddresses as getUnifiedAddresses } from "@whetstone-research/doppler-sdk";
 
 export const getAddresses = (chainId: number) => {
   const unifiedAddresses = getUnifiedAddresses(chainId);
