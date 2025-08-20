@@ -321,7 +321,7 @@ export default function PoolDetails() {
           ? [quoteTokenAddress, baseTokenAddress]  // Buying: swap quote for base
           : [baseTokenAddress, quoteTokenAddress]  // Selling: swap base for quote
         
-        const quote = await quoter.quoteV3ExactInputSingle({
+        const quote = await quoter.quoteExactInputV3({
           tokenIn,
           tokenOut,
           amountIn,
