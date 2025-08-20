@@ -73,15 +73,15 @@ export interface Pools {
   items: Pool[];
 }
 
-// GraphQL query for fetching pools (both v3 static and v4 dynamic auctions)
+// GraphQL query for fetching pools with type filter
 export const GET_POOLS_QUERY = `
-  query GetPools {
+  query GetPools($types: [String!]) {
     pools(
       orderBy: "createdAt"
       orderDirection: "desc"
       limit: 25
       where: {
-        type_in: ["v3", "v4"]
+        type_in: $types
         isCreatorCoin: false
         isContentCoin: false
       }
@@ -123,8 +123,8 @@ export const GET_POOLS_QUERY = `
 `;
 
 // Function to fetch pools using TanStack Query
-export const getPools = async (): Promise<Pools> => {
-  const response = await client.request<{ pools: { items: any[] } }>(GET_POOLS_QUERY);
+export const getPools = async (types: string[] = ["v3", "v4"]): Promise<Pools> => {
+  const response = await client.request<{ pools: { items: any[] } }>(GET_POOLS_QUERY, { types });
   const items: Pool[] = response.pools.items.map((p: any) => ({
     address: p.address,
     chainId: BigInt(p.chainId),

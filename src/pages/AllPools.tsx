@@ -1,8 +1,10 @@
 import { Button } from "@/components/ui/button"
 import { Link } from "react-router-dom"
-import { usePools } from "@/hooks/usePools"
+import { usePools, PoolFilter } from "@/hooks/usePools"
 import { Pool } from "@/utils/graphql"
 import { formatEther } from "viem"
+import { useState } from "react"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 function PoolCard({ pool }: { pool: Pool }) {
   const formatNumber = (value: bigint) => {
@@ -74,8 +76,8 @@ function PoolCard({ pool }: { pool: Pool }) {
 }
 
 export default function AllPools() {
-  const { data: pools, isLoading, error } = usePools()
-
+  const [poolFilter, setPoolFilter] = useState<PoolFilter>("all")
+  const { data: pools, isLoading, error } = usePools(poolFilter)
 
   if (isLoading) {
     return (
@@ -111,6 +113,15 @@ export default function AllPools() {
           </Link>
         </div>
       </div>
+      
+      <Tabs value={poolFilter} onValueChange={(value) => setPoolFilter(value as PoolFilter)} className="mb-6">
+        <TabsList className="grid w-full max-w-md grid-cols-3">
+          <TabsTrigger value="all">All Pools</TabsTrigger>
+          <TabsTrigger value="static">📊 Static Only</TabsTrigger>
+          <TabsTrigger value="dynamic">🚀 Dynamic Only</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      
       <div className="grid gap-6">
         {pools?.items?.map((pool) => (
           <PoolCard key={pool.address} pool={pool} />
