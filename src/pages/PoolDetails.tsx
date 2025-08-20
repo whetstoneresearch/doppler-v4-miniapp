@@ -167,6 +167,18 @@ export default function PoolDetails() {
     }
     return address
   }
+  
+  // Helper function to encode the path for V3 swaps
+  const encodePath = (path: Address[], fee: number): Hex => {
+    const FEE_SIZE = 3
+    let encoded = "0x"
+    for (let i = 0; i < path.length - 1; i++) {
+      encoded += path[i].slice(2)
+      encoded += fee.toString(16).padStart(2 * FEE_SIZE, "0")
+    }
+    encoded += path[path.length - 1].slice(2)
+    return encoded.toLowerCase() as Hex
+  }
 
   // Uniswap v4 Quoter ABI (minimal)
   const uniswapV4QuoterAbi = [
@@ -296,10 +308,33 @@ export default function PoolDetails() {
         return null
       }
     } else {
-      // For V3 pools, use a different quoting mechanism
-      // This is a placeholder - you may need to implement V3 quoting
-      console.log("V3 pool quoting not yet implemented")
-      return null
+      // For V3 pools, use the unified SDK's Quoter
+      try {
+        console.log("Fetching V3 quote for pool:", pool.address)
+        const quoter = new Quoter(publicClient, chainId)
+        
+        const baseTokenAddress = getCurrencyAddress(pool.baseToken.address as Address)
+        const quoteTokenAddress = getCurrencyAddress(pool.quoteToken.address as Address)
+        
+        // For V3, we need to determine the correct token order
+        const [tokenIn, tokenOut] = isBuying 
+          ? [quoteTokenAddress, baseTokenAddress]  // Buying: swap quote for base
+          : [baseTokenAddress, quoteTokenAddress]  // Selling: swap base for quote
+        
+        const quote = await quoter.quoteV3ExactInputSingle({
+          tokenIn,
+          tokenOut,
+          amountIn,
+          fee: pool.fee,
+          sqrtPriceLimitX96: 0n,
+        })
+        
+        console.log("V3 quote result:", quote)
+        return quote.amountOut
+      } catch (error) {
+        console.error("Error fetching V3 quote:", error)
+        return null
+      }
     }
   }
 
@@ -360,9 +395,54 @@ export default function PoolDetails() {
         throw error
       }
     } else {
-      // For V3 pools, use a different swap mechanism
-      console.log("V3 pool swapping not yet implemented")
-      throw new Error("V3 pool swapping not yet implemented")
+      // For V3 pools, use the CommandBuilder's V3 swap
+      try {
+        console.log("Executing V3 swap for pool:", pool.address)
+        
+        const baseTokenAddress = getCurrencyAddress(pool.baseToken.address as Address)
+        const quoteTokenAddress = getCurrencyAddress(pool.quoteToken.address as Address)
+        
+        // Build the path for V3 swap (tokenIn -> tokenOut)
+        const [tokenIn, tokenOut] = isBuying 
+          ? [quoteTokenAddress, baseTokenAddress]  // Buying: swap quote for base
+          : [baseTokenAddress, quoteTokenAddress]  // Selling: swap base for quote
+        
+        // Encode the path for V3 (includes the fee tier)
+        const encodedPath = encodePath([tokenIn, tokenOut], pool.fee)
+        
+        // Build the command for UniversalRouter
+        const commandBuilder = new CommandBuilder()
+        
+        // If buying with ETH, we need to wrap it first
+        const isEthInput = isBuying && quoteTokenAddress === addresses.weth
+        if (isEthInput) {
+          commandBuilder.addWrapEth(universalRouter, amountIn)
+        }
+        
+        // Add the V3 swap command
+        commandBuilder.addV3SwapExactIn(
+          account.address as Address,  // recipient
+          amountIn,                     // amountIn
+          0n,                          // amountOutMinimum (0 for now, should calculate slippage)
+          encodedPath,                  // path with fees
+          false                        // don't unwrap ETH at the end
+        )
+        
+        const [commands, inputs] = commandBuilder.build()
+        
+        await walletClient?.writeContract({
+          address: universalRouter,
+          abi: universalRouterAbi,
+          functionName: "execute",
+          args: [commands, inputs],
+          value: isEthInput ? amountIn : 0n
+        })
+        
+        console.log("V3 swap executed successfully")
+      } catch (error) {
+        console.error("Error executing V3 swap:", error)
+        throw error
+      }
     }
   }
 
