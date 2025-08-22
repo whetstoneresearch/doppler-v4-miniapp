@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { getAddresses as getUnifiedAddresses } from '@whetstone-research/doppler-sdk'
+import { dopplerLensQuoterAbi } from '@/lib/abis/dopplerLens'
 
 type ChainOption = {
   id: number
@@ -71,8 +72,15 @@ export default function QuoteDebug() {
 
   // Quoter
   const [quoterAddressOverride, setQuoterAddressOverride] = useState<string>('')
+  const [useDopplerLens, setUseDopplerLens] = useState<boolean>(false)
   const defaultQuoter = useMemo(() => resolveDefaultV4Quoter(chainId), [chainId])
-  const quoterAddress = (quoterAddressOverride || defaultQuoter || '') as Address | ''
+  const defaultDopplerLens = useMemo(() => {
+    const a: any = getUnifiedAddresses(chainId)
+    return a?.dopplerLens as Address | undefined
+  }, [chainId])
+  const quoterAddress = useDopplerLens 
+    ? (quoterAddressOverride || defaultDopplerLens || '') as Address | ''
+    : (quoterAddressOverride || defaultQuoter || '') as Address | ''
 
   // Results
   const [loading, setLoading] = useState(false)
@@ -109,13 +117,32 @@ export default function QuoteDebug() {
         hooks: (hooks || zeroAddress) as Address,
       }
 
-      const out = await publicClient.readContract({
-        address: quoterAddress as Address,
-        abi: v4QuoterAbi,
-        functionName: 'quoteExactInputSingle',
-        args: [key, zeroForOne, exactAmount, hookData as Hex],
-      })
-      setAmountOut(out as bigint)
+      if (useDopplerLens) {
+        // Use DopplerLens for dynamic auctions
+        const params = {
+          poolKey: key,
+          zeroForOne,
+          exactAmount,
+          hookData: hookData as Hex,
+        }
+        const result = await publicClient.readContract({
+          address: quoterAddress as Address,
+          abi: dopplerLensQuoterAbi,
+          functionName: 'quoteDopplerLensData',
+          args: [params],
+        })
+        // For debugging, we'll just show amount0 or amount1 based on zeroForOne
+        setAmountOut(zeroForOne ? result.amount1 : result.amount0)
+      } else {
+        // Use standard V4 quoter
+        const out = await publicClient.readContract({
+          address: quoterAddress as Address,
+          abi: v4QuoterAbi,
+          functionName: 'quoteExactInputSingle',
+          args: [key, zeroForOne, exactAmount, hookData as Hex],
+        })
+        setAmountOut(out as bigint)
+      }
     } catch (e: any) {
       setError(e?.shortMessage || e?.message || String(e))
     } finally {
@@ -130,7 +157,7 @@ export default function QuoteDebug() {
       <div className="grid gap-6">
         <Card className="p-4 border border-primary/20 bg-card/50">
           <h2 className="text-xl font-semibold mb-4">Environment</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="text-sm text-muted-foreground">Chain</label>
               <select
@@ -143,14 +170,30 @@ export default function QuoteDebug() {
                 ))}
               </select>
             </div>
-            <div className="md:col-span-2">
+            <div>
+              <label className="text-sm text-muted-foreground">Quoter Type</label>
+              <select
+                value={useDopplerLens ? 'doppler' : 'standard'}
+                onChange={(e) => setUseDopplerLens(e.target.value === 'doppler')}
+                className="w-full mt-1 p-2 bg-background/50 border rounded"
+              >
+                <option value="standard">Standard V4 Quoter</option>
+                <option value="doppler">DopplerLens (Dynamic Auctions)</option>
+              </select>
+            </div>
+            <div>
               <label className="text-sm text-muted-foreground">Quoter Address (optional override)</label>
               <Input
-                placeholder={defaultQuoter || '0x...'}
+                placeholder={useDopplerLens ? (defaultDopplerLens || '0x...') : (defaultQuoter || '0x...')}
                 value={quoterAddressOverride}
                 onChange={(e) => setQuoterAddressOverride(e.target.value)}
               />
-              <p className="text-xs text-muted-foreground mt-1">Default: {defaultQuoter || 'Not found for chain'}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Default: {useDopplerLens 
+                  ? (defaultDopplerLens || 'DopplerLens not found for chain')
+                  : (defaultQuoter || 'V4 Quoter not found for chain')
+                }
+              </p>
             </div>
           </div>
         </Card>

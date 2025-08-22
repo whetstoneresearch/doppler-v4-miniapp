@@ -6,7 +6,9 @@ export const getAddresses = (chainId: number) => {
   
   // The unified SDK has all addresses in a flat structure
   // We'll create v3 and v4 objects for compatibility
+  // Also expose key addresses at root level for backwards compatibility
   return {
+    ...unifiedAddresses, // Include all addresses at root level
     v3: {
       airlock: unifiedAddresses.airlock,
       tokenFactory: unifiedAddresses.tokenFactory,

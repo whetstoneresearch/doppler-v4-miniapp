@@ -67,6 +67,21 @@ export interface Pool {
   currency1?: string;
   tickSpacing?: number;
   hooks?: string;
+  // V4 dynamic auction config (from v4PoolConfig query)
+  v4Config?: {
+    hookAddress: string;
+    isToken0: boolean;
+    numTokensToSell: bigint;
+    minProceeds: bigint;
+    maxProceeds: bigint;
+    startingTime: bigint;
+    endingTime: bigint;
+    startingTick: number;
+    endingTick: number;
+    epochLength: bigint;
+    gamma: number;
+    numPdSlugs: bigint;
+  };
 }
 
 export interface Pools {

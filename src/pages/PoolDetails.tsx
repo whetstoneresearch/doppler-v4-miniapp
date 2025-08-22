@@ -13,6 +13,7 @@ import {
   getAddresses,
 } from "@whetstone-research/doppler-sdk"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
+import { dopplerLensQuoterAbi } from "@/lib/abis/dopplerLens"
 
 // Minimal ABI for UniversalRouter execute function
 const universalRouterAbi = [
@@ -28,6 +29,9 @@ const universalRouterAbi = [
   }
 ] as const
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+
+// V4 Dynamic Fee Flag - indicates a pool uses dynamic fees
+const DYNAMIC_FEE_FLAG = 0x800000 // 8388608 in decimal
 
 const client = new GraphQLClient("https://doppler-sdk-s1ck.marble.live/")
 
@@ -70,6 +74,21 @@ const GET_POOL_QUERY = `
         }
       }
     }
+    # Try to get V4 pool config if it's a dynamic auction
+    v4PoolConfig(hookAddress: $address) {
+      hookAddress
+      isToken0
+      numTokensToSell
+      minProceeds
+      maxProceeds
+      startingTime
+      endingTime
+      startingTick
+      endingTick
+      epochLength
+      gamma
+      numPdSlugs
+    }
   }
 `
 
@@ -93,15 +112,40 @@ export default function PoolDetails() {
     queryKey: ['pool', address, chainId],
     queryFn: async () => {
       console.log('Fetching pool with:', { address, chainId })
-      const response = await client.request<{ pools: { items: any[] } }>(GET_POOL_QUERY, {
+      const response = await client.request<{ pools: { items: any[] }, v4PoolConfig?: any }>(GET_POOL_QUERY, {
         address,
         chainId,
       })
       console.log('Full pool GraphQL response:', response)
       const p = response.pools.items?.[0]
       if (!p) return undefined as any
+      
+      // Check if we have V4 pool config data (for dynamic auctions)
+      const v4Config = response.v4PoolConfig
+      
+      // For V4 dynamic auctions, derive currency0 and currency1 from baseToken/quoteToken
+      // based on isToken0 from v4Config
+      let currency0 = p.currency0
+      let currency1 = p.currency1
+      
+      if (!currency0 && !currency1 && v4Config) {
+        // For dynamic auctions, we need to derive currencies from base/quote tokens
+        // In Uniswap V4, token0 is always the smaller address (lexicographically)
+        const baseTokenAddr = p.baseToken?.address as Address
+        const quoteTokenAddr = p.quoteToken?.address as Address
+        
+        // Sort addresses to determine token0 and token1
+        // token0 is always the smaller address
+        const sorted = [baseTokenAddr, quoteTokenAddr].sort((a, b) => 
+          a.toLowerCase() < b.toLowerCase() ? -1 : 1
+        )
+        
+        currency0 = sorted[0]
+        currency1 = sorted[1]
+      }
+      
       // Normalize into Pool shape used by UI
-      const normalized: Pool = {
+      const normalized: Pool & { v4Config?: any } = {
         address: p.address,
         chainId: BigInt(p.chainId),
         tick: p.tick,
@@ -133,17 +177,19 @@ export default function PoolDetails() {
         reserves0: BigInt(p.reserves0),
         reserves1: BigInt(p.reserves1),
         // V4 pools might have poolKey data
-        poolKey: p.currency0 ? {
-          currency0: p.currency0,
-          currency1: p.currency1,
+        poolKey: (currency0 && currency1) ? {
+          currency0: currency0,
+          currency1: currency1,
           fee: p.fee,
           tickSpacing: p.tickSpacing,
           hooks: p.hooks || p.address,
         } : undefined,
-        currency0: p.currency0,
-        currency1: p.currency1,
+        currency0: currency0,
+        currency1: currency1,
         tickSpacing: p.tickSpacing,
         hooks: p.hooks || p.address,
+        // Add V4 config if available
+        v4Config: v4Config || undefined,
       }
       return normalized
     },
@@ -264,45 +310,148 @@ export default function PoolDetails() {
     
     if (isV4Pool && !isMigrated) {
       try {
-        // Use PoolKey directly from indexer data
+        // Use PoolKey directly from indexer data, but handle missing currency fields
+        // For dynamic auctions, currency0/currency1 might not be set, so derive from base/quote tokens
+        let currency0 = pool.currency0
+        let currency1 = pool.currency1
+        
+        if (!currency0 || !currency1) {
+          // Fallback: derive from base/quote tokens
+          // In Uniswap V4, token0 is always the smaller address (lexicographically)
+          const baseTokenAddr = pool.baseToken?.address as Address
+          const quoteTokenAddr = pool.quoteToken?.address as Address
+          
+          // Sort addresses to determine token0 and token1
+          const sorted = [baseTokenAddr, quoteTokenAddr].sort((a, b) => 
+            a.toLowerCase() < b.toLowerCase() ? -1 : 1
+          )
+          
+          currency0 = sorted[0]
+          currency1 = sorted[1]
+        }
+        
+        if (!currency0 || !currency1) {
+          console.error("Cannot determine currency0/currency1 for V4 pool")
+          return null
+        }
+        
+        // Build the pool key with properly sorted addresses
         const key = {
-          currency0: pool.currency0 as Address,
-          currency1: pool.currency1 as Address,
-          fee: pool.fee || 3000,
-          tickSpacing: pool.tickSpacing || 60,
+          currency0: currency0 as Address,
+          currency1: currency1 as Address,
+          fee: pool.fee || DYNAMIC_FEE_FLAG, // Dynamic auctions use DYNAMIC_FEE_FLAG
+          tickSpacing: pool.tickSpacing || 8, // Default to 8 - common for Doppler V4 auctions
           hooks: (pool.hooks || address) as Address,
         }
 
-        // Determine zeroForOne based on which token we're swapping from
-        // We need to check if we're swapping from currency0 to currency1 or vice versa
-        const zeroForOne = isBuying
-          ? key.currency0.toLowerCase() === (pool.quoteToken.address as Address).toLowerCase() // quote -> base
-          : key.currency0.toLowerCase() === (pool.baseToken.address as Address).toLowerCase()  // base -> quote
-
-        // Prefer direct Uniswap v4 Quoter call
-        const v4QuoterAddress = resolveV4QuoterAddress()
-        if (!v4QuoterAddress) {
-          console.warn("v4 Quoter address not found in addresses; falling back to SDK Quoter")
-          const quoter = new Quoter(publicClient, chainId)
-          const quote = await quoter.quoteExactInputV4({
+        // Check if this is a dynamic auction (has v4Config or hooks address)
+        const isDynamicAuction = pool.v4Config || (pool.hooks && pool.hooks !== zeroAddress)
+        
+        if (isDynamicAuction) {
+          // Use DopplerLens for dynamic auctions
+          const dopplerLensAddress = addresses.v4?.dopplerLens || addresses.dopplerLens
+          
+          if (!dopplerLensAddress) {
+            console.error("DopplerLens address not found in addresses")
+            return null
+          }
+          
+          // For DopplerLens, we need to use isToken0 from the V4 config
+          // The test shows: zeroForOne: !isToken0
+          const isToken0 = pool.v4Config?.isToken0 ?? pool.isToken0 ?? true
+          const zeroForOne = !isToken0
+          
+          console.log('Using DopplerLens:', dopplerLensAddress)
+          console.log('Dynamic auction quote params', { 
+            key, 
+            isToken0,
+            zeroForOne, 
+            amountIn: amountIn.toString(), 
+            hookData: '0x' 
+          })
+          
+          const params = {
             poolKey: key,
             zeroForOne,
             exactAmount: amountIn,
-            hookData: "0x",
-          })
-          return quote.amountOut
-        }
+            hookData: "0x" as `0x${string}`,
+          }
+          
+          try {
+            // DopplerLens uses the revert-with-data pattern
+            // We use simulateContract which handles reverts properly
+            const { result } = await publicClient.simulateContract({
+              address: dopplerLensAddress as Address,
+              abi: dopplerLensQuoterAbi,
+              functionName: "quoteDopplerLensData",
+              args: [params],
+            })
+            
+            // DopplerLens returns amount0 and amount1 - we need the appropriate one
+            // If buying (swapping quote for base), we want the base amount out
+            // If selling (swapping base for quote), we want the quote amount out
+            const amountOut = isBuying 
+              ? (isToken0 ? result.amount0 : result.amount1)  // Getting base token
+              : (isToken0 ? result.amount1 : result.amount0)  // Getting quote token
+              
+            console.log('DopplerLens result:', result, 'amountOut:', amountOut)
+            return amountOut
+          } catch (error: any) {
+            // The quoter might revert with the result in the error data
+            // This is expected behavior for V4 quoters
+            console.log('DopplerLens simulation error (expected):', error)
+            
+            // Try to parse the result from the error if it contains return data
+            if (error?.data) {
+              console.log('Attempting to parse revert data:', error.data)
+              // The error data might contain the encoded result
+              // For now, log it and return null - may need custom parsing
+              return null
+            }
+            
+            console.error('Failed to parse DopplerLens quote:', error)
+            return null
+          }
+        } else {
+          // Standard V4 pool (not dynamic auction)
+          // Determine swap direction based on sorted addresses
+          const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
+          const curr0Lower = key.currency0.toLowerCase()
+          
+          // Determine if base token is currency0 or currency1
+          const isBaseToken0 = baseTokenAddr === curr0Lower
+          
+          // For buying (quote -> base), we're swapping FROM quote TO base
+          // For selling (base -> quote), we're swapping FROM base TO quote
+          const zeroForOne = isBuying 
+            ? !isBaseToken0  // If buying and base is token1, swap 0->1. If base is token0, swap 1->0
+            : isBaseToken0   // If selling and base is token0, swap 0->1. If base is token1, swap 1->0
 
-        console.log('Using Uniswap v4 Quoter:', v4QuoterAddress)
-        console.log('quote params', { key, zeroForOne, amountIn: amountIn.toString(), hookData: '0x' })
-        const result: any = await publicClient.readContract({
-          address: v4QuoterAddress,
-          abi: uniswapV4QuoterAbi,
-          functionName: "quoteExactInputSingle",
-          args: [key, zeroForOne, amountIn, "0x"],
-        })
-        const amountOut: bigint = typeof result === 'bigint' ? result : (result?.amountOut as bigint)
-        return amountOut
+          // Use standard Uniswap v4 Quoter
+          const v4QuoterAddress = resolveV4QuoterAddress()
+          if (!v4QuoterAddress) {
+            console.warn("v4 Quoter address not found in addresses; falling back to SDK Quoter")
+            const quoter = new Quoter(publicClient, chainId)
+            const quote = await quoter.quoteExactInputV4({
+              poolKey: key,
+              zeroForOne,
+              exactAmount: amountIn,
+              hookData: "0x",
+            })
+            return quote.amountOut
+          }
+
+          console.log('Using Uniswap v4 Quoter:', v4QuoterAddress)
+          console.log('quote params', { key, zeroForOne, amountIn: amountIn.toString(), hookData: '0x' })
+          const result: any = await publicClient.readContract({
+            address: v4QuoterAddress,
+            abi: uniswapV4QuoterAbi,
+            functionName: "quoteExactInputSingle",
+            args: [key, zeroForOne, amountIn, "0x"],
+          })
+          const amountOut: bigint = typeof result === 'bigint' ? result : (result?.amountOut as bigint)
+          return amountOut
+        }
       } catch (error) {
         console.error("Error fetching V4 quote:", error)
         return null
@@ -362,20 +511,52 @@ export default function PoolDetails() {
     
     if (isV4Pool && !isMigrated) {
       try {
-        // Use PoolKey directly from indexer data
+        // Use PoolKey directly from indexer data, but handle missing currency fields
+        // For dynamic auctions, currency0/currency1 might not be set, so derive from base/quote tokens
+        let currency0 = pool.currency0
+        let currency1 = pool.currency1
+        
+        if (!currency0 || !currency1) {
+          // Fallback: derive from base/quote tokens
+          // In Uniswap V4, token0 is always the smaller address (lexicographically)
+          const baseTokenAddr = pool.baseToken?.address as Address
+          const quoteTokenAddr = pool.quoteToken?.address as Address
+          
+          // Sort addresses to determine token0 and token1
+          const sorted = [baseTokenAddr, quoteTokenAddr].sort((a, b) => 
+            a.toLowerCase() < b.toLowerCase() ? -1 : 1
+          )
+          
+          currency0 = sorted[0]
+          currency1 = sorted[1]
+        }
+        
+        if (!currency0 || !currency1) {
+          console.error("Cannot determine currency0/currency1 for V4 pool")
+          return null
+        }
+        
+        // Build the pool key with properly sorted addresses
         const key = {
-          currency0: pool.currency0 as Address,
-          currency1: pool.currency1 as Address,
-          fee: pool.fee || 3000,
-          tickSpacing: pool.tickSpacing || 60,
+          currency0: currency0 as Address,
+          currency1: currency1 as Address,
+          fee: pool.fee || DYNAMIC_FEE_FLAG, // Dynamic auctions use DYNAMIC_FEE_FLAG
+          tickSpacing: pool.tickSpacing || 8, // Default to 8 - common for Doppler V4 auctions
           hooks: (pool.hooks || address) as Address,
         }
 
-        // Determine zeroForOne based on which token we're swapping from
-        // We need to check if we're swapping from currency0 to currency1 or vice versa
+        // Determine swap direction based on sorted addresses
+        const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
+        const curr0Lower = key.currency0.toLowerCase()
+        
+        // Determine if base token is currency0 or currency1
+        const isBaseToken0 = baseTokenAddr === curr0Lower
+        
+        // For buying (quote -> base), we're swapping FROM quote TO base
+        // For selling (base -> quote), we're swapping FROM base TO quote
         const zeroForOne = isBuying 
-          ? key.currency0.toLowerCase() === (pool.quoteToken.address as Address).toLowerCase()
-          : key.currency0.toLowerCase() === (pool.baseToken.address as Address).toLowerCase()
+          ? !isBaseToken0  // If buying and base is token1, swap 0->1. If base is token0, swap 1->0
+          : isBaseToken0   // If selling and base is token0, swap 0->1. If base is token1, swap 1->0
 
         const actionBuilder = new V4ActionBuilder()
         const [actions, params] = actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, 0n, "0x")
