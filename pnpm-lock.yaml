@@ -24,8 +24,8 @@ importers:
         specifier: ^5.74.4
         version: 5.83.0(react@19.1.0)
       '@whetstone-research/doppler-sdk':
-        specifier: 0.0.1-alpha.4
-        version: 0.0.1-alpha.4(bufferutil@4.0.9)(hardhat@2.26.3(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10))(jiti@2.4.2)(postcss@8.5.6)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)
+        specifier: 0.0.1-alpha.7
+        version: 0.0.1-alpha.7(bufferutil@4.0.9)(hardhat@2.26.3(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10))(jiti@2.4.2)(postcss@8.5.6)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -1541,8 +1541,8 @@ packages:
   '@walletconnect/window-metadata@1.0.1':
     resolution: {integrity: sha512-9koTqyGrM2cqFRW517BPY/iEtUDx2r1+Pwwu5m7sJ7ka79wi3EyqhqcICk/yDmv6jAS1rjKgTKXlEhanYjijcA==}
 
-  '@whetstone-research/doppler-sdk@0.0.1-alpha.4':
-    resolution: {integrity: sha512-g8u3a5vGCol2CPBnLDcAQc8flZQjUzMF461CF8iABNQks9HjCc8Bz7lWC2jQQaiJD6cvsRJhKeeqCXpzIF0gTQ==}
+  '@whetstone-research/doppler-sdk@0.0.1-alpha.7':
+    resolution: {integrity: sha512-hlWMsAM89SJUMskOZpWOA3/iakm9OJ4L4FYtH+gCJ0psSp+wS9JJjPJWTx21gJxR/wYWoKglSXM0MpLg0fqbHA==}
     engines: {node: '>=18.0.0'}
 
   abitype@1.0.8:
@@ -6064,7 +6064,7 @@ snapshots:
       '@walletconnect/window-getters': 1.0.1
       tslib: 1.14.1
 
-  '@whetstone-research/doppler-sdk@0.0.1-alpha.4(bufferutil@4.0.9)(hardhat@2.26.3(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10))(jiti@2.4.2)(postcss@8.5.6)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)':
+  '@whetstone-research/doppler-sdk@0.0.1-alpha.7(bufferutil@4.0.9)(hardhat@2.26.3(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10))(jiti@2.4.2)(postcss@8.5.6)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)':
     dependencies:
       '@delvtech/drift': 0.10.1(typescript@5.7.3)(zod@3.22.4)
       '@uniswap/sdk-core': 5.9.0

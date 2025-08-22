@@ -10,8 +10,8 @@ import { useAccount, usePublicClient, useBalance } from "wagmi"
 import { useWalletClient } from "wagmi"
 import { 
   Quoter,
-  getAddresses,
 } from "@whetstone-research/doppler-sdk"
+import { getAddresses } from "@/utils/getAddresses"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 import { dopplerLensQuoterAbi } from "@/lib/abis/dopplerLens"
 
@@ -27,6 +27,17 @@ const universalRouterAbi = [
     outputs: [],
     stateMutability: "payable"
   }
+] as const
+
+// DN404 ABI for mirrorERC721 function
+const dn404Abi = [
+  {
+    name: 'mirrorERC721',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
 ] as const
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -195,6 +206,32 @@ export default function PoolDetails() {
     },
   })
 
+  // Check if the base token is a DN404 token with NFT mirror
+  const { data: nftMirrorAddress } = useQuery({
+    queryKey: ['nftMirror', pool?.baseToken.address],
+    queryFn: async () => {
+      if (!pool?.baseToken.address || !publicClient) return null
+      
+      try {
+        const nftAddress = await publicClient.readContract({
+          address: pool.baseToken.address as Address,
+          abi: dn404Abi,
+          functionName: 'mirrorERC721',
+        })
+        
+        // Check if the returned address is valid (not zero address)
+        if (nftAddress && nftAddress !== zeroAddress) {
+          return nftAddress
+        }
+      } catch (error) {
+        // Token doesn't have mirrorERC721 function, not a DN404
+      }
+      
+      return null
+    },
+    enabled: !!pool?.baseToken.address && !!publicClient,
+  })
+
   const { data: baseTokenBalance } = useBalance({
     address: account.address,
     token: pool?.baseToken.address as Address,
@@ -349,7 +386,7 @@ export default function PoolDetails() {
         
         if (isDynamicAuction) {
           // Use DopplerLens for dynamic auctions
-          const dopplerLensAddress = addresses.v4?.dopplerLens || addresses.dopplerLens
+          const dopplerLensAddress = addresses.v4.dopplerLens || addresses.dopplerLens
           
           if (!dopplerLensAddress) {
             console.error("DopplerLens address not found in addresses")
@@ -726,8 +763,15 @@ export default function PoolDetails() {
             <p className="text-muted-foreground">
               {pool.baseToken.name} / {pool.quoteToken.name}
             </p>
-            <div className="inline-flex items-center mt-2 px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
-              {pool.type === 'v4' ? '🚀 Dynamic Auction' : '📊 Static Auction'}
+            <div className="flex gap-2 mt-2">
+              <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
+                {pool.type === 'v4' ? '🚀 Dynamic Auction' : '📊 Static Auction'}
+              </div>
+              {nftMirrorAddress && (
+                <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-purple-500/10 text-purple-500">
+                  🎨 Doppler404
+                </div>
+              )}
             </div>
           </div>
           <div className="text-right">
@@ -774,9 +818,20 @@ export default function PoolDetails() {
               <p className="text-lg">{new Date(Number(pool.createdAt) * 1000).toLocaleDateString()}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Address</p>
+              <p className="text-sm text-muted-foreground">Pool Address</p>
               <p className="text-lg font-mono text-sm break-all">{pool.address}</p>
             </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Token Address</p>
+              <p className="text-lg font-mono text-sm break-all">{pool.baseToken.address}</p>
+            </div>
+            {nftMirrorAddress && (
+              <div>
+                <p className="text-sm text-muted-foreground">NFT Collection (ERC721)</p>
+                <p className="text-lg font-mono text-sm break-all">{nftMirrorAddress}</p>
+                <p className="text-xs text-muted-foreground mt-1">This is a Doppler404 token with NFT functionality</p>
+              </div>
+            )}
           </div>
         </div>
       </div>

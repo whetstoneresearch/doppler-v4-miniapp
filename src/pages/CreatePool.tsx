@@ -4,8 +4,19 @@ import { useState } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
 import { getAddresses } from "@/utils/getAddresses"
 import { DopplerSDK, StaticAuctionBuilder, DynamicAuctionBuilder } from "@whetstone-research/doppler-sdk"
-import { PublicClient, parseEther } from "viem"
+import { PublicClient, parseEther, type Address } from "viem"
 import { getBlock } from "viem/actions"
+
+// DN404 ABI for mirrorERC721 function
+const dn404Abi = [
+  {
+    name: 'mirrorERC721',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+] as const
 
 export default function CreatePool() {
   const account = useAccount()
@@ -13,18 +24,32 @@ export default function CreatePool() {
   const publicClient = usePublicClient() as PublicClient
   const [isDeploying, setIsDeploying] = useState(false)
   const [auctionType, setAuctionType] = useState<'static' | 'dynamic'>('dynamic')
+  const [isDoppler404, setIsDoppler404] = useState(false)
+  const [deploymentResult, setDeploymentResult] = useState<{
+    tokenAddress: string
+    nftAddress?: string
+    poolAddress?: string
+    hookAddress?: string
+    poolId?: string
+    transactionHash: string
+    auctionType: 'static' | 'dynamic'
+  } | null>(null)
 
   const [formData, setFormData] = useState({
     tokenName: '',
     tokenSymbol: '',
+    baseURI: '',
+    totalSupply: '10000000',
   })
 
 
   const handleDeploy = async (e: React.FormEvent) => {
-    if (!walletClient || !publicClient) throw new Error("Wallet client or public client not found");
     e.preventDefault();
     setIsDeploying(true);
+    setDeploymentResult(null);
+    
     try {
+      if (!walletClient || !publicClient) throw new Error("Wallet client or public client not found");
       if (!account.address) throw new Error("Account address not found");
 
       // Use the unified SDK
@@ -48,7 +73,16 @@ export default function CreatePool() {
           stateMutability: 'view',
         }],
         functionName: 'owner',
-      }) as `0x${string}`;
+      }) as Address;
+      
+      // Calculate token supply based on whether it's Doppler404
+      const totalSupply = isDoppler404 
+        ? parseEther(formData.totalSupply) // For DN404, this is the number of NFTs
+        : parseEther("1000000000"); // 1 billion for regular tokens
+      
+      const numTokensToSell = isDoppler404
+        ? (totalSupply * 9n) / 10n // 90% for DN404
+        : parseEther("900000000"); // 900 million for regular tokens
       
       // Handle both static and dynamic auctions using the new builder pattern
       if (auctionType === 'static') {
@@ -56,20 +90,33 @@ export default function CreatePool() {
         const weth = addresses.v3.weth;
 
         // Build static auction using the new builder pattern
-        const staticParams = new StaticAuctionBuilder()
-          .tokenConfig({
+        const staticBuilder = new StaticAuctionBuilder()
+        
+        // Configure token based on whether it's Doppler404
+        if (isDoppler404) {
+          staticBuilder.tokenConfig({
+            type: 'doppler404' as const,
             name: formData.tokenName,
             symbol: formData.tokenSymbol,
-            tokenURI: "", // Should be fetched from metadata service
+            baseURI: formData.baseURI || `https://metadata.example.com/${formData.tokenSymbol.toLowerCase()}/`,
           })
+        } else {
+          staticBuilder.tokenConfig({
+            name: formData.tokenName,
+            symbol: formData.tokenSymbol,
+            tokenURI: "",
+          })
+        }
+        
+        const staticParams = staticBuilder
           .saleConfig({
-            initialSupply: parseEther("1000000000"), // 1 billion tokens
-            numTokensToSell: parseEther("900000000"), // 900 million tokens
+            initialSupply: totalSupply,
+            numTokensToSell: numTokensToSell,
             numeraire: weth,
           })
           .poolByTicks({
-            startTick: 175000,
-            endTick: 225000,
+            startTick: isDoppler404 ? 183000 : 175000, // Doppler404: 0.1 ETH, Regular: default
+            endTick: isDoppler404 ? 230000 : 225000,   // Doppler404: 0.01 ETH, Regular: default
             fee: 10000, // 1% fee tier
           })
           .withMigration({
@@ -79,18 +126,36 @@ export default function CreatePool() {
           .withIntegrator(account.address)
           .build();
         
-        console.log("=== STATIC AUCTION DEPLOYMENT (New Builder) ===");
-        console.log("Static Params:", JSON.stringify(staticParams, (_key, value) => 
-          typeof value === 'bigint' ? value.toString() : value, 2));
-        console.log("==============================================");
         
         // Create static auction
         const result = await factory.createStaticAuction(staticParams);
         
-        console.log("Static auction deployment completed!");
+        console.log(`${isDoppler404 ? 'Doppler 404' : ''} static auction deployment completed!`);
         console.log("Transaction hash:", result.transactionHash);
         console.log("Token address:", result.tokenAddress);
         console.log("Pool address:", result.poolAddress);
+        
+        // If Doppler404, get the NFT mirror address
+        let nftAddress: Address | undefined;
+        if (isDoppler404) {
+          try {
+            nftAddress = await publicClient.readContract({
+              address: result.tokenAddress as Address,
+              abi: dn404Abi,
+              functionName: 'mirrorERC721',
+            });
+          } catch (error) {
+            console.error("Failed to get NFT mirror address:", error);
+          }
+        }
+        
+        setDeploymentResult({
+          tokenAddress: result.tokenAddress,
+          nftAddress,
+          poolAddress: result.poolAddress,
+          transactionHash: result.transactionHash,
+          auctionType: 'static',
+        });
         
         return;
       }
@@ -98,26 +163,39 @@ export default function CreatePool() {
       // Dynamic auction configuration using the new builder pattern
       // Get block timestamp first
       const block = await getBlock(publicClient);
-      const adjustedTimestamp = block.timestamp + 300n; // Add 5 minutes
+      const adjustedTimestamp = block.timestamp + 60n; // Add 1 minute
       
       // Build dynamic auction using the new builder pattern
-      const dynamicParams = new DynamicAuctionBuilder()
-        .tokenConfig({
+      const dynamicBuilder = new DynamicAuctionBuilder()
+      
+      // Configure token based on whether it's Doppler404
+      if (isDoppler404) {
+        dynamicBuilder.tokenConfig({
+          type: 'doppler404' as const,
+          name: formData.tokenName,
+          symbol: formData.tokenSymbol,
+          baseURI: formData.baseURI || `https://metadata.example.com/${formData.tokenSymbol.toLowerCase()}/`,
+        })
+      } else {
+        dynamicBuilder.tokenConfig({
           name: formData.tokenName,
           symbol: formData.tokenSymbol,
           tokenURI: "",
         })
+      }
+      
+      const dynamicParams = dynamicBuilder
         .saleConfig({
-          initialSupply: parseEther("1000000000"), // 1 billion tokens
-          numTokensToSell: parseEther("900000000"), // 900 million tokens
+          initialSupply: totalSupply,
+          numTokensToSell: numTokensToSell,
         })
         .poolConfig({
           fee: 3000, // 0.3% fee tier
           tickSpacing: 8, // Match V4 tick spacing
         })
         .auctionByTicks({
-          startTick: 180000,
-          endTick: 190000,
+          startTick: isDoppler404 ? 183000 : 180000, // Doppler404: 0.1 ETH, Regular: default
+          endTick: isDoppler404 ? 230000 : 190000,   // Doppler404: 0.01 ETH, Regular: default
           minProceeds: parseEther("100"), // 100 ETH
           maxProceeds: parseEther("600"), // 600 ETH
           durationDays: 7, // 7 days
@@ -149,22 +227,38 @@ export default function CreatePool() {
         })
         .build();
       
-      console.log("=== DYNAMIC AUCTION DEPLOYMENT (New Builder) ===");
-      console.log("Dynamic Params:", JSON.stringify(dynamicParams, (_key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
-      console.log("Airlock Owner:", airlockOwner);
-      console.log("Chain ID:", 84532);
-      console.log("Current Address:", account.address);
-      console.log("================================================");
       
       // Create dynamic auction using the built config
       const result = await factory.createDynamicAuction(dynamicParams);
       
-      console.log("Dynamic auction deployment completed!");
+      console.log(`${isDoppler404 ? 'Doppler 404' : ''} dynamic auction deployment completed!`);
       console.log("Transaction hash:", result.transactionHash);
       console.log("Token address:", result.tokenAddress);
       console.log("Hook address:", result.hookAddress);
       console.log("Pool ID:", result.poolId);
+      
+      // If Doppler404, get the NFT mirror address
+      let nftAddress: Address | undefined;
+      if (isDoppler404) {
+        try {
+          nftAddress = await publicClient.readContract({
+            address: result.tokenAddress as Address,
+            abi: dn404Abi,
+            functionName: 'mirrorERC721',
+          });
+        } catch (error) {
+          console.error("Failed to get NFT mirror address:", error);
+        }
+      }
+      
+      setDeploymentResult({
+        tokenAddress: result.tokenAddress,
+        nftAddress,
+        hookAddress: result.hookAddress,
+        poolId: result.poolId,
+        transactionHash: result.transactionHash,
+        auctionType: 'dynamic',
+      });
 
     } catch (error) {
       console.error("Auction deployment failed:", error);
@@ -211,6 +305,27 @@ export default function CreatePool() {
                   : 'Dutch auction with dynamic rebalancing across epochs'}
               </p>
             </div>
+            
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="doppler404"
+                  checked={isDoppler404}
+                  onChange={(e) => setIsDoppler404(e.target.checked)}
+                  className="w-4 h-4 rounded border-input text-primary focus:ring-primary"
+                />
+                <label htmlFor="doppler404" className="text-sm font-medium cursor-pointer">
+                  Create Doppler404 Token (NFT + ERC20)
+                </label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isDoppler404 
+                  ? 'Create a hybrid token that combines NFT and ERC20 functionality with built-in liquidity'
+                  : 'Create a standard ERC20 token with built-in liquidity'}
+              </p>
+            </div>
+            
             <div className="space-y-2">
               <label className="text-sm font-medium">Token Name</label>
               <input 
@@ -218,9 +333,11 @@ export default function CreatePool() {
                 value={formData.tokenName}
                 onChange={(e) => setFormData(prev => ({ ...prev, tokenName: e.target.value }))}
                 className="w-full px-4 py-2 rounded-md bg-background/50 border border-input focus:border-primary focus:ring-1 focus:ring-primary"
-                placeholder="e.g., My Awesome Token"
+                placeholder={isDoppler404 ? "e.g., Cool NFT Collection" : "e.g., My Awesome Token"}
+                required
               />
             </div>
+            
             <div className="space-y-2">
               <label className="text-sm font-medium">Token Symbol</label>
               <input 
@@ -228,19 +345,56 @@ export default function CreatePool() {
                 value={formData.tokenSymbol}
                 onChange={(e) => setFormData(prev => ({ ...prev, tokenSymbol: e.target.value.toUpperCase() }))}
                 className="w-full px-4 py-2 rounded-md bg-background/50 border border-input focus:border-primary focus:ring-1 focus:ring-primary"
-                placeholder="e.g., MAT"
+                placeholder={isDoppler404 ? "e.g., COOL" : "e.g., MAT"}
                 maxLength={6}
+                required
               />
               <p className="text-xs text-muted-foreground">Maximum 6 characters, automatically converted to uppercase</p>
             </div>
+            
+            {isDoppler404 && (
+              <>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Base URI</label>
+                  <input 
+                    type="text"
+                    value={formData.baseURI}
+                    onChange={(e) => setFormData(prev => ({ ...prev, baseURI: e.target.value }))}
+                    className="w-full px-4 py-2 rounded-md bg-background/50 border border-input focus:border-primary focus:ring-1 focus:ring-primary"
+                    placeholder="e.g., https://metadata.example.com/cool/"
+                    required={isDoppler404}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The base URI for NFT metadata. Token IDs will be appended to this.
+                  </p>
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Total Supply (Number of NFTs)</label>
+                  <input 
+                    type="number"
+                    value={formData.totalSupply}
+                    onChange={(e) => setFormData(prev => ({ ...prev, totalSupply: e.target.value }))}
+                    className="w-full px-4 py-2 rounded-md bg-background/50 border border-input focus:border-primary focus:ring-1 focus:ring-primary"
+                    placeholder="e.g., 10000000"
+                    min="1"
+                    required={isDoppler404}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Total number of NFTs in the collection. 90% will be available for initial sale.
+                  </p>
+                </div>
+              </>
+            )}
+            
             <div className="space-y-4 pt-4">
               <div className="flex gap-4">
                 <Button 
                   type="submit" 
                   className="flex-1 bg-primary/90 hover:bg-primary/80"
-                  disabled={isDeploying}
+                  disabled={isDeploying || !account.isConnected}
                 >
-                  {isDeploying ? "Deploying..." : `Create ${auctionType === 'static' ? 'Static' : 'Dynamic'} Token`}
+                  {isDeploying ? "Deploying..." : `Create ${isDoppler404 ? 'Doppler404' : ''} ${auctionType === 'static' ? 'Static' : 'Dynamic'} Token`}
                 </Button>
               </div>
               <Link to="/" className="block">
@@ -254,6 +408,77 @@ export default function CreatePool() {
             </div>
           </form>
         </div>
+        
+        {deploymentResult && (
+          <div className="mt-6 border border-primary/20 rounded-lg p-6 bg-card/50 backdrop-blur">
+            <h2 className="text-xl font-bold mb-4 text-primary">Deployment Successful! 🎉</h2>
+            <div className="space-y-3 text-sm">
+              <div>
+                <span className="font-medium">Token Address (ERC20):</span>
+                <p className="font-mono break-all text-muted-foreground">{deploymentResult.tokenAddress}</p>
+              </div>
+              {deploymentResult.nftAddress && (
+                <div>
+                  <span className="font-medium">NFT Address (ERC721):</span>
+                  <p className="font-mono break-all text-muted-foreground">{deploymentResult.nftAddress}</p>
+                </div>
+              )}
+              {deploymentResult.poolAddress && (
+                <div>
+                  <span className="font-medium">Pool Address:</span>
+                  <p className="font-mono break-all text-muted-foreground">{deploymentResult.poolAddress}</p>
+                </div>
+              )}
+              {deploymentResult.hookAddress && (
+                <div>
+                  <span className="font-medium">Hook Address:</span>
+                  <p className="font-mono break-all text-muted-foreground">{deploymentResult.hookAddress}</p>
+                </div>
+              )}
+              {deploymentResult.poolId && (
+                <div>
+                  <span className="font-medium">Pool ID:</span>
+                  <p className="font-mono break-all text-muted-foreground">{deploymentResult.poolId}</p>
+                </div>
+              )}
+              <div>
+                <span className="font-medium">Transaction Hash:</span>
+                <p className="font-mono break-all text-muted-foreground">{deploymentResult.transactionHash}</p>
+              </div>
+              <div className="pt-3 space-y-2">
+                <a 
+                  href={`https://sepolia.basescan.org/tx/${deploymentResult.transactionHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Button variant="outline" className="w-full">
+                    View Transaction on BaseScan →
+                  </Button>
+                </a>
+                <a 
+                  href={`https://sepolia.basescan.org/address/${deploymentResult.tokenAddress}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Button variant="outline" className="w-full">
+                    View Token Contract →
+                  </Button>
+                </a>
+                {deploymentResult.nftAddress && (
+                  <a 
+                    href={`https://sepolia.basescan.org/address/${deploymentResult.nftAddress}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Button variant="outline" className="w-full">
+                      View NFT Contract →
+                    </Button>
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

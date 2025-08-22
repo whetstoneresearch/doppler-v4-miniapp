@@ -130,7 +130,7 @@ export default function QuoteDebug() {
           abi: dopplerLensQuoterAbi,
           functionName: 'quoteDopplerLensData',
           args: [params],
-        })
+        }) as { amount0: bigint; amount1: bigint }
         // For debugging, we'll just show amount0 or amount1 based on zeroForOne
         setAmountOut(zeroForOne ? result.amount1 : result.amount0)
       } else {
