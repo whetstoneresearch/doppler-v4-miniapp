@@ -370,19 +370,28 @@ export default function CreatePool() {
                 </div>
                 
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Total Supply (Number of NFTs)</label>
+                  <label className="text-sm font-medium">Total Token Supply</label>
                   <input 
                     type="number"
                     value={formData.totalSupply}
                     onChange={(e) => setFormData(prev => ({ ...prev, totalSupply: e.target.value }))}
                     className="w-full px-4 py-2 rounded-md bg-background/50 border border-input focus:border-primary focus:ring-1 focus:ring-primary"
                     placeholder="e.g., 10000000"
-                    min="1"
+                    min="1000"
+                    step="1000"
                     required={isDoppler404}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Total number of NFTs in the collection. 90% will be available for initial sale.
-                  </p>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-primary">
+                      NFT Supply: {formData.totalSupply ? Math.floor(Number(formData.totalSupply) / 1000).toLocaleString() : '0'} NFTs
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Each NFT represents 1,000 tokens. Total supply must be divisible by 1,000.
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      90% of tokens will be available for initial sale, 10% reserved for liquidity.
+                    </p>
+                  </div>
                 </div>
               </>
             )}
