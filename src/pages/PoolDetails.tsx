@@ -5,7 +5,7 @@ import { Pool } from "@/utils/graphql"
 import { Address, formatEther, Hex, maxUint256, parseEther, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useAccount, usePublicClient, useBalance } from "wagmi"
 import { useWalletClient } from "wagmi"
 import { 
@@ -36,6 +36,31 @@ const dn404Abi = [
     type: 'function',
     stateMutability: 'view',
     inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+] as const
+
+// ERC721 ABI for NFT functions
+const erc721Abi = [
+  {
+    name: 'totalSupply',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'tokenURI',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'tokenId', type: 'uint256' }],
+    outputs: [{ name: '', type: 'string' }],
+  },
+  {
+    name: 'ownerOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'tokenId', type: 'uint256' }],
     outputs: [{ name: '', type: 'address' }],
   },
 ] as const
@@ -113,6 +138,14 @@ export default function PoolDetails() {
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
+  const [nftAddress, setNftAddress] = useState<Address | null>(null)
+  const [nftData, setNftData] = useState<Array<{
+    tokenId: number
+    owner: Address
+    imageUrl: string
+    metadata: any
+  }>>([])
+  const [loadingNfts, setLoadingNfts] = useState(false)
   const addresses = getAddresses(chainId)
   const { universalRouter } = addresses
 
@@ -706,9 +739,132 @@ export default function PoolDetails() {
     setQuotedAmount(null)
   }
 
+  // Check if token is Doppler404 and fetch NFT address
+  useEffect(() => {
+    const checkDoppler404 = async () => {
+      if (!pool || !publicClient) return
+      
+      try {
+        // Try to get the NFT mirror address from the base token
+        const mirrorAddress = await publicClient.readContract({
+          address: pool.baseToken.address as Address,
+          abi: dn404Abi,
+          functionName: 'mirrorERC721',
+        })
+        
+        if (mirrorAddress && mirrorAddress !== zeroAddress) {
+          setNftAddress(mirrorAddress)
+          console.log('Found Doppler404 NFT address:', mirrorAddress)
+        }
+      } catch (error) {
+        console.log('Not a Doppler404 token')
+      }
+    }
+    
+    checkDoppler404()
+  }, [pool, publicClient])
+
+  // Fetch NFT data when we have an NFT address
+  useEffect(() => {
+    const fetchNftData = async () => {
+      if (!nftAddress || !publicClient) return
+      
+      setLoadingNfts(true)
+      try {
+        // Get total supply
+        const totalSupply = await publicClient.readContract({
+          address: nftAddress,
+          abi: erc721Abi,
+          functionName: 'totalSupply',
+        })
+        
+        const nftCount = Number(totalSupply)
+        console.log('Total NFT supply:', nftCount)
+        
+        // Fetch data for each NFT
+        const nftPromises = []
+        for (let tokenId = 1; tokenId <= Math.min(nftCount, 100); tokenId++) { // Limit to 100 for performance
+          nftPromises.push(
+            (async () => {
+              try {
+                // Get owner
+                const owner = await publicClient.readContract({
+                  address: nftAddress,
+                  abi: erc721Abi,
+                  functionName: 'ownerOf',
+                  args: [BigInt(tokenId)],
+                })
+                
+                // Get tokenURI
+                const tokenURI = await publicClient.readContract({
+                  address: nftAddress,
+                  abi: erc721Abi,
+                  functionName: 'tokenURI',
+                  args: [BigInt(tokenId)],
+                })
+                
+                // Fetch metadata from URI
+                let imageUrl = ''
+                let metadata = null
+                
+                if (tokenURI) {
+                  try {
+                    // Handle IPFS URIs
+                    let metadataUrl = tokenURI
+                    if (tokenURI.startsWith('ipfs://')) {
+                      metadataUrl = tokenURI.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                    }
+                    
+                    const response = await fetch(metadataUrl)
+                    metadata = await response.json()
+                    
+                    // Get image URL from metadata
+                    if (metadata.image) {
+                      imageUrl = metadata.image
+                      if (imageUrl.startsWith('ipfs://')) {
+                        imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                      }
+                    }
+                  } catch (error) {
+                    console.error('Error fetching metadata for token', tokenId, error)
+                  }
+                }
+                
+                return {
+                  tokenId,
+                  owner: owner as Address,
+                  imageUrl,
+                  metadata,
+                }
+              } catch (error) {
+                console.error('Error fetching NFT data for token', tokenId, error)
+                return null
+              }
+            })()
+          )
+        }
+        
+        const results = await Promise.all(nftPromises)
+        const validResults = results.filter(r => r !== null) as typeof nftData
+        setNftData(validResults)
+      } catch (error) {
+        console.error('Error fetching NFT data:', error)
+      } finally {
+        setLoadingNfts(false)
+      }
+    }
+    
+    fetchNftData()
+  }, [nftAddress, publicClient])
+
   const handleSwap = () => {
     if (!amount || !quotedAmount) return
     executeSwap(parseEther(amount))
+  }
+
+  // Helper function to truncate addresses
+  const truncateAddress = (address: string) => {
+    return `${address.slice(0, 6)}...${address.slice(-4)}`
   }
 
   const handleMaxClick = () => {
@@ -914,6 +1070,65 @@ export default function PoolDetails() {
           Swap
         </Button>
       </div>
+
+      {/* NFT Gallery for Doppler404 tokens */}
+      {nftAddress && (
+        <div className="border border-primary/20 rounded-lg p-6 bg-card/50 backdrop-blur">
+          <h2 className="text-xl font-bold mb-4">NFT Collection</h2>
+          
+          {loadingNfts ? (
+            <div className="text-center py-8">
+              <p className="text-muted-foreground">Loading NFTs...</p>
+            </div>
+          ) : nftData.length > 0 ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {nftData.map((nft) => (
+                <div key={nft.tokenId} className="flex flex-col space-y-2">
+                  <div className="aspect-square rounded-lg overflow-hidden bg-background/50 border border-input">
+                    {nft.imageUrl ? (
+                      <img 
+                        src={nft.imageUrl} 
+                        alt={`NFT #${nft.tokenId}`}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none'
+                          const parent = (e.target as HTMLImageElement).parentElement
+                          if (parent) {
+                            const placeholder = document.createElement('div')
+                            placeholder.className = 'w-full h-full flex items-center justify-center text-muted-foreground'
+                            placeholder.textContent = `#${nft.tokenId}`
+                            parent.appendChild(placeholder)
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                        #{nft.tokenId}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-center space-y-1">
+                    <p className="text-sm font-medium">#{nft.tokenId}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {truncateAddress(nft.owner)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-muted-foreground">No NFTs found</p>
+            </div>
+          )}
+          
+          {nftData.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-4 text-center">
+              Showing {nftData.length} NFTs {nftData.length >= 100 && '(limited to first 100)'}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
