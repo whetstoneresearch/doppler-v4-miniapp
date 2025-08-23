@@ -1,7 +1,4 @@
 {
-  // Ensure client-side routes work on refresh by serving index.html
-  // for any request that doesn't look like a static asset (no dot in path).
-  // This is the recommended SPA fallback pattern for Vercel static deployments.
   "routes": [
     { "src": "/[^.]+", "dest": "/" }
   ]
