@@ -1,12 +1,16 @@
 import { Button } from "@/components/ui/button"
 import { useAccount, useBalance, useConnect, useDisconnect } from 'wagmi'
-import { injected } from 'wagmi/connectors'
-import { Link } from "react-router-dom"
+import { Link, useLocation, useSearchParams } from "react-router-dom"
 
 export function Navbar() {
   const { address, isConnected } = useAccount()
-  const { connect } = useConnect()
+  const { connect, connectors } = useConnect()
   const { disconnect } = useDisconnect()
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
+  const chainIdParam = searchParams.get('chainId')
+  const isPoolPage = location.pathname.startsWith('/pool/')
+  const targetChainId = chainIdParam ? Number(chainIdParam) : (isPoolPage ? 84532 : undefined)
   const { data: balance } = useBalance({
     address: address,
   })
@@ -46,7 +50,15 @@ export function Navbar() {
             </div>
           ) : (
             <Button 
-              onClick={() => connect({ connector: injected() })}
+              onClick={() => {
+                // Prefer the injected connector from wagmi's list
+                const injectedConnector = connectors.find(c => c.id === 'injected') ?? connectors[0]
+                if (targetChainId) {
+                  connect({ connector: injectedConnector, chainId: targetChainId })
+                } else {
+                  connect({ connector: injectedConnector })
+                }
+              }}
               variant="outline"
               className="relative overflow-hidden group"
             >

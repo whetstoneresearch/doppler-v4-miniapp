@@ -6,7 +6,7 @@ import { Address, formatEther, Hex, maxUint256, parseEther, zeroAddress } from "
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
-import { useAccount, usePublicClient, useBalance } from "wagmi"
+import { useAccount, usePublicClient, useBalance, useSwitchChain } from "wagmi"
 import { useWalletClient } from "wagmi"
 import { 
   Quoter,
@@ -132,9 +132,10 @@ export default function PoolDetails() {
   const { address } = useParams<{ address: string }>()
   const [searchParams] = useSearchParams()
   const account = useAccount()
+  const { switchChain, chains, isPending: isSwitching } = useSwitchChain()
   const { data: walletClient } = useWalletClient(account)
-  const publicClient = usePublicClient()
   const chainId = searchParams.get('chainId') ? Number(searchParams.get('chainId')) : 84532
+  const publicClient = usePublicClient({ chainId })
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
@@ -146,11 +147,27 @@ export default function PoolDetails() {
     metadata: any
   }>>([])
   const [loadingNfts, setLoadingNfts] = useState(false)
+  const [nftTotalSupply, setNftTotalSupply] = useState<number>(0)
+  const [showOnlyMine, setShowOnlyMine] = useState<boolean>(false)
   const addresses = getAddresses(chainId)
   const { universalRouter } = addresses
 
   console.log('Pool address:', address)
   console.log('Chain ID from URL:', chainId)
+
+  // Auto-switch wallet network to chainId from query if connected and supported
+  useEffect(() => {
+    if (!account?.isConnected) return
+    if (!chainId) return
+    if (!chains?.some((c) => c.id === chainId)) return
+    if (account.chainId === chainId) return
+    if (isSwitching) return
+    try {
+      switchChain?.({ chainId })
+    } catch (e) {
+      console.error('Failed to request network switch', e)
+    }
+  }, [account?.isConnected, account?.chainId, chainId, chains, isSwitching, switchChain])
 
   const { data: pool, isLoading, error } = useQuery({
     queryKey: ['pool', address, chainId],
@@ -264,6 +281,15 @@ export default function PoolDetails() {
     },
     enabled: !!pool?.baseToken.address && !!publicClient,
   })
+
+  // Derive nftAddress from detection; if not Doppler404, ensure it's null
+  useEffect(() => {
+    if (nftMirrorAddress) {
+      setNftAddress(nftMirrorAddress as Address)
+    } else {
+      setNftAddress(null)
+    }
+  }, [nftMirrorAddress])
 
   const { data: baseTokenBalance } = useBalance({
     address: account.address,
@@ -560,6 +586,7 @@ export default function PoolDetails() {
   const executeSwap = async (amountIn: bigint) => {
     if (!pool) return
     if (!account.address || !walletClient) throw new Error("account must be connected");
+    if (!publicClient) throw new Error("public client not available")
 
     // Check if the pool has migrated to V2
     const isMigrated = pool.asset?.migrated === true
@@ -634,13 +661,90 @@ export default function PoolDetails() {
         .addAction(V4ActionType.TAKE_ALL, [zeroForOne ? key.currency1 : key.currency0, 0]).build()
         const [commands, inputs] = new CommandBuilder().addV4Swap(actions, params).build()
 
-        await walletClient?.writeContract({
+        const txHash = await walletClient?.writeContract({
           address: universalRouter,
           abi: universalRouterAbi,
           functionName: "execute",
           args: [commands, inputs],
           value: zeroForOne ? amountIn : 0n
         })
+        if (txHash) {
+          const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
+          if (receipt.status === 'success' && isBuying && nftAddress) {
+            await new Promise((r) => setTimeout(r, 2000))
+            const prevSupply = nftTotalSupply
+            try {
+              const latestSupplyBn = await publicClient.readContract({
+                address: nftAddress,
+                abi: erc721Abi,
+                functionName: 'totalSupply',
+              })
+              const latestSupply = Number(latestSupplyBn)
+              if (latestSupply > prevSupply) {
+                // Only fetch up to 100 to stay within the gallery limit
+                const start = Math.max(prevSupply + 1, 1)
+                const end = Math.min(latestSupply, 100)
+                // Fetch and append newly minted NFTs
+                const nftPromises: Promise<{
+                  tokenId: number
+                  owner: Address
+                  imageUrl: string
+                  metadata: any
+                } | null>[] = []
+                for (let tokenId = start; tokenId <= end; tokenId++) {
+                  nftPromises.push((async () => {
+                    try {
+                      const owner = await publicClient.readContract({
+                        address: nftAddress,
+                        abi: erc721Abi,
+                        functionName: 'ownerOf',
+                        args: [BigInt(tokenId)],
+                      })
+                      const tokenURI = await publicClient.readContract({
+                        address: nftAddress,
+                        abi: erc721Abi,
+                        functionName: 'tokenURI',
+                        args: [BigInt(tokenId)],
+                      })
+                      let imageUrl = ''
+                      let metadata: any = null
+                      if (tokenURI) {
+                        try {
+                          let metadataUrl = tokenURI as string
+                          if (metadataUrl.startsWith('ipfs://')) {
+                            metadataUrl = metadataUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                          }
+                          const response = await fetch(metadataUrl)
+                          metadata = await response.json()
+                          if (metadata?.image) {
+                            imageUrl = metadata.image
+                            if (imageUrl.startsWith('ipfs://')) {
+                              imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                            }
+                          }
+                        } catch (err) {
+                          console.error('Error fetching metadata for token', tokenId, err)
+                        }
+                      }
+                      return { tokenId, owner: owner as Address, imageUrl, metadata }
+                    } catch (err) {
+                      console.error('Error fetching new NFT data for token', tokenId, err)
+                      return null
+                    }
+                  })())
+                }
+                const results = await Promise.all(nftPromises)
+                const newItems = results.filter(Boolean) as typeof nftData
+                if (newItems.length) {
+                  setNftData((prev) => [...prev, ...newItems])
+                }
+                setNftTotalSupply(latestSupply)
+              }
+            } catch (e) {
+              console.error('Error refreshing NFTs after buy (V4):', e)
+            }
+          }
+        }
       } catch (error) {
         console.error("Error executing V4 swap:", error)
         throw error
@@ -681,14 +785,88 @@ export default function PoolDetails() {
         
         const [commands, inputs] = commandBuilder.build()
         
-        await walletClient?.writeContract({
+        const txHash = await walletClient?.writeContract({
           address: universalRouter,
           abi: universalRouterAbi,
           functionName: "execute",
           args: [commands, inputs],
           value: isEthInput ? amountIn : 0n
         })
-        
+        if (txHash) {
+          const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
+          if (receipt.status === 'success' && isBuying && nftAddress) {
+            await new Promise((r) => setTimeout(r, 2000))
+            const prevSupply = nftTotalSupply
+            try {
+              const latestSupplyBn = await publicClient.readContract({
+                address: nftAddress,
+                abi: erc721Abi,
+                functionName: 'totalSupply',
+              })
+              const latestSupply = Number(latestSupplyBn)
+              if (latestSupply > prevSupply) {
+                const start = Math.max(prevSupply + 1, 1)
+                const end = Math.min(latestSupply, 100)
+                const nftPromises: Promise<{
+                  tokenId: number
+                  owner: Address
+                  imageUrl: string
+                  metadata: any
+                } | null>[] = []
+                for (let tokenId = start; tokenId <= end; tokenId++) {
+                  nftPromises.push((async () => {
+                    try {
+                      const owner = await publicClient.readContract({
+                        address: nftAddress,
+                        abi: erc721Abi,
+                        functionName: 'ownerOf',
+                        args: [BigInt(tokenId)],
+                      })
+                      const tokenURI = await publicClient.readContract({
+                        address: nftAddress,
+                        abi: erc721Abi,
+                        functionName: 'tokenURI',
+                        args: [BigInt(tokenId)],
+                      })
+                      let imageUrl = ''
+                      let metadata: any = null
+                      if (tokenURI) {
+                        try {
+                          let metadataUrl = tokenURI as string
+                          if (metadataUrl.startsWith('ipfs://')) {
+                            metadataUrl = metadataUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                          }
+                          const response = await fetch(metadataUrl)
+                          metadata = await response.json()
+                          if (metadata?.image) {
+                            imageUrl = metadata.image
+                            if (imageUrl.startsWith('ipfs://')) {
+                              imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                            }
+                          }
+                        } catch (err) {
+                          console.error('Error fetching metadata for token', tokenId, err)
+                        }
+                      }
+                      return { tokenId, owner: owner as Address, imageUrl, metadata }
+                    } catch (err) {
+                      console.error('Error fetching new NFT data for token', tokenId, err)
+                      return null
+                    }
+                  })())
+                }
+                const results = await Promise.all(nftPromises)
+                const newItems = results.filter(Boolean) as typeof nftData
+                if (newItems.length) {
+                  setNftData((prev) => [...prev, ...newItems])
+                }
+                setNftTotalSupply(latestSupply)
+              }
+            } catch (e) {
+              console.error('Error refreshing NFTs after buy (V3):', e)
+            }
+          }
+        }
         console.log("V3 swap executed successfully")
       } catch (error) {
         console.error("Error executing V3 swap:", error)
@@ -739,30 +917,7 @@ export default function PoolDetails() {
     setQuotedAmount(null)
   }
 
-  // Check if token is Doppler404 and fetch NFT address
-  useEffect(() => {
-    const checkDoppler404 = async () => {
-      if (!pool || !publicClient) return
-      
-      try {
-        // Try to get the NFT mirror address from the base token
-        const mirrorAddress = await publicClient.readContract({
-          address: pool.baseToken.address as Address,
-          abi: dn404Abi,
-          functionName: 'mirrorERC721',
-        })
-        
-        if (mirrorAddress && mirrorAddress !== zeroAddress) {
-          setNftAddress(mirrorAddress)
-          console.log('Found Doppler404 NFT address:', mirrorAddress)
-        }
-      } catch (error) {
-        console.log('Not a Doppler404 token')
-      }
-    }
-    
-    checkDoppler404()
-  }, [pool, publicClient])
+  // All other NFT logic uses nftAddress; nothing runs if not Doppler404.
 
   // Fetch NFT data when we have an NFT address
   useEffect(() => {
@@ -779,6 +934,7 @@ export default function PoolDetails() {
         })
         
         const nftCount = Number(totalSupply)
+        setNftTotalSupply(nftCount)
         console.log('Total NFT supply:', nftCount)
         
         // Fetch data for each NFT
@@ -1074,15 +1230,28 @@ export default function PoolDetails() {
       {/* NFT Gallery for Doppler404 tokens */}
       {nftAddress && (
         <div className="border border-primary/20 rounded-lg p-6 bg-card/50 backdrop-blur">
-          <h2 className="text-xl font-bold mb-4">NFT Collection</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold">NFT Collection</h2>
+            {account?.address && (
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showOnlyMine}
+                  onChange={(e) => setShowOnlyMine(e.target.checked)}
+                  className="h-4 w-4 accent-primary"
+                />
+                Only my NFTs
+              </label>
+            )}
+          </div>
           
           {loadingNfts ? (
             <div className="text-center py-8">
               <p className="text-muted-foreground">Loading NFTs...</p>
             </div>
-          ) : nftData.length > 0 ? (
+          ) : ((showOnlyMine && account?.address) ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()).length > 0 : nftData.length > 0) ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {nftData.map((nft) => (
+              {(showOnlyMine && account?.address ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()) : nftData).map((nft) => (
                 <div key={nft.tokenId} className="flex flex-col space-y-2">
                   <div className="aspect-square rounded-lg overflow-hidden bg-background/50 border border-input">
                     {nft.imageUrl ? (
@@ -1122,9 +1291,13 @@ export default function PoolDetails() {
             </div>
           )}
           
-          {nftData.length > 0 && (
+          {((showOnlyMine && account?.address) ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()).length : nftData.length) > 0 && (
             <p className="text-xs text-muted-foreground mt-4 text-center">
-              Showing {nftData.length} NFTs {nftData.length >= 100 && '(limited to first 100)'}
+              {showOnlyMine && account?.address ? (
+                <>Showing {nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()).length} of {nftData.length} NFTs</>
+              ) : (
+                <>Showing {nftData.length} NFTs {nftData.length >= 100 && '(limited to first 100)'} </>
+              )}
             </p>
           )}
         </div>
