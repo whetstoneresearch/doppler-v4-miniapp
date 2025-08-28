@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button"
 import { Link } from "react-router-dom"
 import { useState } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
-import { getAddresses } from "@/utils/getAddresses"
+import { getAddresses } from "@whetstone-research/doppler-sdk"
 import { DopplerSDK, StaticAuctionBuilder, DynamicAuctionBuilder } from "@whetstone-research/doppler-sdk"
 import { PublicClient, parseEther, type Address } from "viem"
 import { getBlock } from "viem/actions"
@@ -64,7 +64,7 @@ export default function CreatePool() {
       
       // Get airlock owner address for dynamic auction fee streaming
       const airlockOwner = await publicClient.readContract({
-        address: addresses.v4.airlock,
+        address: addresses.airlock,
         abi: [{
           name: 'owner',
           type: 'function',
@@ -87,7 +87,7 @@ export default function CreatePool() {
       // Handle both static and dynamic auctions using the new builder pattern
       if (auctionType === 'static') {
         // Use WETH address directly from addresses
-        const weth = addresses.v3.weth;
+        const weth = addresses.weth;
 
         // Build static auction using the new builder pattern
         const staticBuilder = new StaticAuctionBuilder()

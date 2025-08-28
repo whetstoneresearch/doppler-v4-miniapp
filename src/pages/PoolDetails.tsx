@@ -11,7 +11,7 @@ import { useWalletClient } from "wagmi"
 import { 
   Quoter,
 } from "@whetstone-research/doppler-sdk"
-import { getAddresses } from "@/utils/getAddresses"
+import { getAddresses } from "@whetstone-research/doppler-sdk"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 import { dopplerLensQuoterAbi } from "@/lib/abis/dopplerLens"
 
@@ -355,8 +355,7 @@ export default function PoolDetails() {
     return (
       a?.v4Quoter ||
       a?.uniswapV4Quoter ||
-      a?.quoter ||
-      a?.v4?.quoter // in case nested structure
+      a?.quoter
     ) as Address | undefined
   }
 
@@ -445,7 +444,7 @@ export default function PoolDetails() {
         
         if (isDynamicAuction) {
           // Use DopplerLens for dynamic auctions
-          const dopplerLensAddress = addresses.v4.dopplerLens || addresses.dopplerLens
+          const dopplerLensAddress = addresses.dopplerLens
           
           if (!dopplerLensAddress) {
             console.error("DopplerLens address not found in addresses")

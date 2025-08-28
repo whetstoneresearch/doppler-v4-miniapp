@@ -48,8 +48,7 @@ function resolveDefaultV4Quoter(chainId: number): Address | undefined {
   return (
     a?.v4Quoter ||
     a?.uniswapV4Quoter ||
-    a?.quoter ||
-    a?.v4?.quoter
+    a?.quoter
   ) as Address | undefined
 }
 
