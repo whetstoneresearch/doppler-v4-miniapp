@@ -29,8 +29,9 @@ const universalRouterAbi = [
   }
 ] as const
 
-// DN404 ABI for mirrorERC721 function
+// DN404 ABI (extended for freezing + introspection)
 const dn404Abi = [
+  // Existing mirror function to locate the ERC721 mirror
   {
     name: 'mirrorERC721',
     type: 'function',
@@ -38,10 +39,47 @@ const dn404Abi = [
     inputs: [],
     outputs: [{ name: '', type: 'address' }],
   },
+  // New freeze function on Doppler DN404 base ERC20
+  {
+    name: 'freezeTokenIDsByIndex',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'tokenIDIndexes', type: 'uint256[]' },
+    ],
+    outputs: [],
+  },
+  // Public getter for frozen balances mapping
+  {
+    name: 'frozenBalances',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [ { name: 'owner', type: 'address' } ],
+    outputs: [ { name: '', type: 'uint256' } ],
+  },
+  // decimals() read is not needed for freeze math (UNIT is not decimals); omitted
+  // Alternative enumeration helper: returns tokenId at owner's index
+  {
+    name: 'tokenOfOwnerByIndex',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'index', type: 'uint256' },
+    ],
+    outputs: [ { name: 'id', type: 'uint256' } ],
+  },
 ] as const
 
 // ERC721 ABI for NFT functions
 const erc721Abi = [
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'owner', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
   {
     name: 'totalSupply',
     type: 'function',
@@ -149,6 +187,16 @@ export default function PoolDetails() {
   const [loadingNfts, setLoadingNfts] = useState(false)
   const [nftTotalSupply, setNftTotalSupply] = useState<number>(0)
   const [showOnlyMine, setShowOnlyMine] = useState<boolean>(false)
+  // DN404 freezing-related state
+  const [frozenBalanceRaw, setFrozenBalanceRaw] = useState<bigint | null>(null)
+  // Note: UNIT (tokens per NFT) is not exposed on-chain; default to 1000 for Doppler404
+  const DN404_DEFAULT_UNIT = 1000n
+  const [ownedIdsOrdered, setOwnedIdsOrdered] = useState<number[] | null>(null)
+  const [supportsTokenOfOwnerByIndex, setSupportsTokenOfOwnerByIndex] = useState<boolean>(false)
+  const [freezeMode, setFreezeMode] = useState<boolean>(false)
+  const [selectedTokenIds, setSelectedTokenIds] = useState<Set<number>>(new Set())
+  // Freeze Next N flow removed; selection-only via tokenOfOwnerByIndex
+  const [isFreezing, setIsFreezing] = useState<boolean>(false)
   const addresses = getAddresses(chainId)
   const { universalRouter } = addresses
 
@@ -291,6 +339,72 @@ export default function PoolDetails() {
     }
   }, [nftMirrorAddress])
 
+  // Load DN404 freeze-related data (decimals, frozen balance, and ownedIds if supported)
+  useEffect(() => {
+    const loadFreezeData = async () => {
+      try {
+        if (!publicClient || !pool?.baseToken.address || !account?.address) return
+
+        // No reliable on-chain read for UNIT (tokens per NFT). We assume 1000.
+
+        // Read frozen balance
+        try {
+          const fb = await publicClient.readContract({
+            address: pool.baseToken.address as Address,
+            abi: dn404Abi,
+            functionName: 'frozenBalances',
+            args: [account.address as Address],
+          })
+          setFrozenBalanceRaw(BigInt(fb as any))
+        } catch {
+          setFrozenBalanceRaw(null)
+        }
+
+        // Prefer standard ERC721Enumerable-style: tokenOfOwnerByIndex
+        try {
+          if (!nftMirrorAddress) throw new Error('No NFT mirror to get balance')
+          const bal = await publicClient.readContract({
+            address: nftMirrorAddress as Address,
+            abi: erc721Abi,
+            functionName: 'balanceOf',
+            args: [account.address as Address],
+          })
+          const count = typeof bal === 'bigint' ? Number(bal) : Number(bal as any)
+          if (count > 0) {
+            const calls = Array.from({ length: Math.min(count, 512) }, (_, i) => ({
+              address: pool.baseToken.address as Address,
+              abi: dn404Abi,
+              functionName: 'tokenOfOwnerByIndex' as const,
+              args: [account.address as Address, BigInt(i)],
+            }))
+            const res = await publicClient.multicall({ contracts: calls })
+            const ids: number[] = []
+            for (const r of res) {
+              if (r.status === 'success' && typeof r.result === 'bigint') {
+                ids.push(Number(r.result))
+              } else {
+                throw new Error('tokenOfOwnerByIndex failed')
+              }
+            }
+            setOwnedIdsOrdered(ids)
+            setSupportsTokenOfOwnerByIndex(true)
+          } else {
+            setOwnedIdsOrdered([])
+            setSupportsTokenOfOwnerByIndex(true)
+          }
+        } catch {
+          setOwnedIdsOrdered(null)
+          setSupportsTokenOfOwnerByIndex(false)
+        }
+      } catch (e) {
+        console.error('Error loading DN404 freeze data', e)
+      }
+    }
+    if (pool?.baseToken.address && account?.address) {
+      loadFreezeData()
+    }
+  }, [publicClient, pool?.baseToken.address, account?.address, nftMirrorAddress])
+
   const { data: baseTokenBalance } = useBalance({
     address: account.address,
     token: pool?.baseToken.address as Address,
@@ -304,7 +418,7 @@ export default function PoolDetails() {
   // Helper function to properly handle currency addresses and sorting
   const getCurrencyAddress = (address: Address): Address => {
     // If it's the zero address, replace with WETH
-    if (address === zeroAddress || address === "0x0000000000000000000000000000000000000000") {
+    if (address === zeroAddress) {
       return addresses.weth || zeroAddress
     }
     return address
@@ -1012,6 +1126,113 @@ export default function PoolDetails() {
     fetchNftData()
   }, [nftAddress, publicClient])
 
+  // DN404 freeze helpers and actions
+  const frozenNftCount = (() => {
+    if (frozenBalanceRaw === null) return null
+    try {
+      return Number(frozenBalanceRaw / DN404_DEFAULT_UNIT)
+    } catch {
+      return null
+    }
+  })()
+
+  // Derive user's NFTs when needed (we compute directly where required to avoid unused warnings)
+
+  const tokenIdToIndex = (tokenId: number): number | null => {
+    if (!ownedIdsOrdered) return null
+    const idx = ownedIdsOrdered.indexOf(tokenId)
+    return idx >= 0 ? idx : null
+  }
+
+  const toggleSelectToken = (tokenId: number) => {
+    setSelectedTokenIds(prev => {
+      const next = new Set(prev)
+      if (next.has(tokenId)) next.delete(tokenId)
+      else next.add(tokenId)
+      return next
+    })
+  }
+
+  const onFreezeSelected = async () => {
+    if (!walletClient || !publicClient || !pool?.baseToken.address) return
+    if (selectedTokenIds.size === 0) return
+    setIsFreezing(true)
+    try {
+      let indexes: bigint[] = []
+      if (supportsTokenOfOwnerByIndex && ownedIdsOrdered) {
+        const idxs: number[] = []
+        for (const tid of selectedTokenIds) {
+          const idx = tokenIdToIndex(tid)
+          if (idx !== null) idxs.push(idx)
+        }
+        if (idxs.length === 0) throw new Error('Could not resolve token indices for selection')
+        indexes = idxs.map(n => BigInt(n))
+      } else {
+        throw new Error('This token does not expose owned indices; use Freeze Next N instead')
+      }
+
+      const txHash = await walletClient.writeContract({
+        address: pool.baseToken.address as Address,
+        abi: dn404Abi,
+        functionName: 'freezeTokenIDsByIndex',
+        args: [indexes],
+      })
+      await publicClient.waitForTransactionReceipt({ hash: txHash })
+
+      // Refresh freeze data
+      try {
+        const fb = await publicClient.readContract({
+          address: pool.baseToken.address as Address,
+          abi: dn404Abi,
+          functionName: 'frozenBalances',
+          args: [account.address as Address],
+        })
+        setFrozenBalanceRaw(BigInt(fb as any))
+      } catch {}
+      // Refresh ordering (may change after freeze)
+      try {
+        if (supportsTokenOfOwnerByIndex && nftMirrorAddress) {
+          const bal = await publicClient.readContract({
+            address: nftMirrorAddress as Address,
+            abi: erc721Abi,
+            functionName: 'balanceOf',
+            args: [account.address as Address],
+          })
+          const count = typeof bal === 'bigint' ? Number(bal) : Number(bal as any)
+          const n = Math.min(count, 512)
+          if (n > 0) {
+            const calls = Array.from({ length: n }, (_, i) => ({
+              address: pool.baseToken.address as Address,
+              abi: dn404Abi,
+              functionName: 'tokenOfOwnerByIndex' as const,
+              args: [account.address as Address, BigInt(i)],
+            }))
+            const res = await publicClient.multicall({ contracts: calls })
+            const ids: number[] = []
+            for (const r of res) {
+              if (r.status === 'success' && typeof r.result === 'bigint') {
+                ids.push(Number(r.result))
+              } else {
+                throw new Error('tokenOfOwnerByIndex refresh failed')
+              }
+            }
+            setOwnedIdsOrdered(ids)
+          } else {
+            setOwnedIdsOrdered([])
+          }
+        }
+      } catch {}
+      setSelectedTokenIds(new Set())
+    } catch (e) {
+      console.error('Freeze selected failed', e)
+      alert(e instanceof Error ? e.message : 'Freeze failed')
+    } finally {
+      setIsFreezing(false)
+    }
+  }
+
+  // No Freeze Next N; all freezing is selection-based
+
   const handleSwap = () => {
     if (!amount || !quotedAmount) return
     executeSwap(parseEther(amount))
@@ -1231,18 +1452,60 @@ export default function PoolDetails() {
         <div className="border border-primary/20 rounded-lg p-6 bg-card/50 backdrop-blur">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold">NFT Collection</h2>
-            {account?.address && (
-              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={showOnlyMine}
-                  onChange={(e) => setShowOnlyMine(e.target.checked)}
-                  className="h-4 w-4 accent-primary"
-                />
-                Only my NFTs
-              </label>
-            )}
+            <div className="flex items-center gap-4">
+              {typeof frozenNftCount === 'number' && (
+                <div className="text-sm text-muted-foreground">
+                  Frozen: <span className="font-medium text-foreground">{frozenNftCount}</span>
+                </div>
+              )}
+              {account?.address && (
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showOnlyMine}
+                    onChange={(e) => setShowOnlyMine(e.target.checked)}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  Only my NFTs
+                </label>
+              )}
+              {account?.address && (
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={freezeMode}
+                    onChange={(e) => {
+                      setFreezeMode(e.target.checked)
+                      if (e.target.checked) setShowOnlyMine(true)
+                    }}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  Freeze mode
+                </label>
+              )}
+            </div>
           </div>
+
+          {freezeMode && (
+            <div className="mb-4 p-3 border rounded-md bg-background/40">
+              {supportsTokenOfOwnerByIndex ? (
+                <p className="text-xs text-muted-foreground">
+                  Select specific NFTs to freeze, then click Freeze Selected. Frozen NFTs are the first items in your owned list.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  This token does not expose owner index enumeration; freezing selection is unavailable.
+                </p>
+              )}
+              {supportsTokenOfOwnerByIndex && (
+                <div className="mt-2">
+                  <Button onClick={onFreezeSelected} disabled={isFreezing || selectedTokenIds.size === 0}>
+                    {isFreezing ? 'Freezing...' : `Freeze Selected (${selectedTokenIds.size})`}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
           
           {loadingNfts ? (
             <div className="text-center py-8">
@@ -1250,9 +1513,14 @@ export default function PoolDetails() {
             </div>
           ) : ((showOnlyMine && account?.address) ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()).length > 0 : nftData.length > 0) ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {(showOnlyMine && account?.address ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()) : nftData).map((nft) => (
+              {(showOnlyMine && account?.address ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()) : nftData).map((nft) => {
+                const isMine = account?.address && nft.owner.toLowerCase() === (account.address as string).toLowerCase()
+                const idx = isMine ? tokenIdToIndex(nft.tokenId) : null
+                const isFrozen = typeof idx === 'number' && typeof frozenNftCount === 'number' && idx < frozenNftCount
+                const selected = selectedTokenIds.has(nft.tokenId)
+                return (
                 <div key={nft.tokenId} className="flex flex-col space-y-2">
-                  <div className="aspect-square rounded-lg overflow-hidden bg-background/50 border border-input">
+                  <div className="relative aspect-square rounded-lg overflow-hidden bg-background/50 border border-input">
                     {nft.imageUrl ? (
                       <img 
                         src={nft.imageUrl} 
@@ -1274,15 +1542,30 @@ export default function PoolDetails() {
                         #{nft.tokenId}
                       </div>
                     )}
+                    {freezeMode && isMine && supportsTokenOfOwnerByIndex && (
+                      <button
+                        className={`absolute m-2 p-1 rounded bg-background/80 border text-xs ${selected ? 'border-primary text-primary' : 'border-muted-foreground/40 text-foreground/80'}`}
+                        onClick={() => toggleSelectToken(nft.tokenId)}
+                        title={selected ? 'Unselect' : 'Select for freeze'}
+                      >
+                        {selected ? 'Selected' : 'Select'}
+                      </button>
+                    )}
+                    {isFrozen && (
+                      <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-primary/80 text-white text-xs">Frozen</div>
+                    )}
                   </div>
                   <div className="text-center space-y-1">
                     <p className="text-sm font-medium">#{nft.tokenId}</p>
                     <p className="text-xs text-muted-foreground">
                       {truncateAddress(nft.owner)}
                     </p>
+                    {freezeMode && isMine && typeof idx === 'number' && (
+                      <p className="text-[10px] text-muted-foreground">Index: {idx}</p>
+                    )}
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           ) : (
             <div className="text-center py-8">
