@@ -173,7 +173,7 @@ export default function PoolDetails() {
   const { switchChain, chains, isPending: isSwitching } = useSwitchChain()
   const { data: walletClient } = useWalletClient(account)
   const chainId = searchParams.get('chainId') ? Number(searchParams.get('chainId')) : 84532
-  const publicClient = usePublicClient({ chainId })
+  const publicClient = usePublicClient({ chainId }) as any
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)

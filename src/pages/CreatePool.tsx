@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
 import { getAddresses } from "@whetstone-research/doppler-sdk"
 import { DopplerSDK, StaticAuctionBuilder, DynamicAuctionBuilder } from "@whetstone-research/doppler-sdk"
-import { PublicClient, parseEther, type Address } from "viem"
+import { parseEther, type Address } from "viem"
 import { getBlock } from "viem/actions"
 
 // DN404 ABI for mirrorERC721 function
@@ -21,7 +21,7 @@ const dn404Abi = [
 export default function CreatePool() {
   const account = useAccount()
   const { data: walletClient } = useWalletClient()
-  const publicClient = usePublicClient() as PublicClient
+  const publicClient = usePublicClient()
   const [isDeploying, setIsDeploying] = useState(false)
   const [auctionType, setAuctionType] = useState<'static' | 'dynamic'>('dynamic')
   const [isDoppler404, setIsDoppler404] = useState(false)
@@ -54,9 +54,9 @@ export default function CreatePool() {
 
       // Use the unified SDK
       const sdk = new DopplerSDK({
-        walletClient: walletClient,
-        publicClient: publicClient,
-        chainId: 84532, // Base Sepolia
+        walletClient: walletClient as any,
+        publicClient: publicClient as any,
+        chainId: 84532 as const, // Base Sepolia
       });
 
       const factory = sdk.factory;
@@ -90,7 +90,7 @@ export default function CreatePool() {
         const weth = addresses.weth;
 
         // Build static auction using the new builder pattern
-        const staticBuilder = new StaticAuctionBuilder()
+        const staticBuilder = new StaticAuctionBuilder(84532)
         
         // Configure token based on whether it's Doppler404
         if (isDoppler404) {
@@ -166,7 +166,7 @@ export default function CreatePool() {
       const adjustedTimestamp = block.timestamp + 60n; // Add 1 minute
       
       // Build dynamic auction using the new builder pattern
-      const dynamicBuilder = new DynamicAuctionBuilder()
+      const dynamicBuilder = new DynamicAuctionBuilder(84532)
       
       // Configure token based on whether it's Doppler404
       if (isDoppler404) {
@@ -219,7 +219,7 @@ export default function CreatePool() {
             ]
           }
         })
-        .withGovernance({ useDefaults: true })
+        .withGovernance({ type: 'default' })
         .withUserAddress(account.address)
         .withIntegrator() // Uses zero address by default
         .withTime({
