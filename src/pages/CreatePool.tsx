@@ -42,6 +42,10 @@ export default function CreatePool() {
     totalSupply: '10000000',
   })
 
+  // DN404: number of ERC20 base units represented per NFT.
+  // We want 1 NFT = 1,000 tokens; tokens have 18 decimals, so use 1000e18.
+  const DN404_UNIT = parseEther('1000')
+
 
   const handleDeploy = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,7 +81,7 @@ export default function CreatePool() {
       
       // Calculate token supply based on whether it's Doppler404
       const totalSupply = isDoppler404 
-        ? parseEther(formData.totalSupply) // For DN404, this is the number of NFTs
+        ? parseEther(formData.totalSupply) // For DN404, this is the token supply in base units
         : parseEther("1000000000"); // 1 billion for regular tokens
       
       const numTokensToSell = isDoppler404
@@ -99,6 +103,7 @@ export default function CreatePool() {
             name: formData.tokenName,
             symbol: formData.tokenSymbol,
             baseURI: formData.baseURI || `https://metadata.example.com/${formData.tokenSymbol.toLowerCase()}/`,
+            unit: DN404_UNIT,
           })
         } else {
           staticBuilder.tokenConfig({
@@ -175,6 +180,7 @@ export default function CreatePool() {
           name: formData.tokenName,
           symbol: formData.tokenSymbol,
           baseURI: formData.baseURI || `https://metadata.example.com/${formData.tokenSymbol.toLowerCase()}/`,
+          unit: DN404_UNIT,
         })
       } else {
         dynamicBuilder.tokenConfig({
