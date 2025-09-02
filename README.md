@@ -1,10 +1,19 @@
 # Doppler V4 Miniapp
 
-This is a demo app for the Doppler protocol. It showcases deploying and interacting with Doppler auctions (static/V3 and dynamic/V4), quoting trades, and optional Doppler404 (DN404) hybrid NFT + ERC20 tokens.
+This is a demo app for the Doppler protocol. It showcases deploying and interacting with Doppler auctions (static/V3 and dynamic/V4), quoting trades, among other unique features. Notably, it uses the latest [doppler-sdk-alpha](https://github.com/whetstoneresearch/doppler-sdk-alpha) which provides a unified interface and singular package to install to manage Doppler integrations, regardless of which type of auction integrators wish to use.
 
 - Doppler protocol on GitHub: https://github.com/whetstoneresearch/doppler
 
-## What This Demo Uses From the SDK
+## Get started
+
+```
+git clone https://github.com/whetstoneresearch/doppler-demo-app.git
+cd doppler-demo-app
+pnpm install
+pnpm dev 
+```
+
+## What This Demo Uses From the [SDK](https://github.com/whetstoneresearch/doppler-sdk-alpha)
 
 - **`DopplerSDK.factory`**: unified entry to create static (V3) and dynamic (V4) auctions.
 - **Builder pattern**: `StaticAuctionBuilder` and `DynamicAuctionBuilder` to construct deployments.
@@ -77,18 +86,6 @@ const result = await factory.createDynamicAuction(dynamicParams);
 ```
 [Source: `src/pages/CreatePool.tsx#L187-L238`](src/pages/CreatePool.tsx#L187-L238)
 
-### Doppler404 (DN404) Token Config
-
-```ts
-dynamicBuilder.tokenConfig({
-  type: 'doppler404' as const,
-  name: formData.tokenName,
-  symbol: formData.tokenSymbol,
-  baseURI: formData.baseURI || `https://metadata.example.com/${formData.tokenSymbol.toLowerCase()}/`,
-})
-```
-[Source: `src/pages/CreatePool.tsx#L172-L178`](src/pages/CreatePool.tsx#L172-L178)
-
 ### Quoting
 
 ```ts
@@ -111,3 +108,7 @@ import { getAddresses } from "@whetstone-research/doppler-sdk";
 const addresses = getAddresses(84532); // or your chainId
 ```
 [Source: `src/pages/CreatePool.tsx#L5-L5`](src/pages/CreatePool.tsx#L5-L5), [and `#L63-L63`](src/pages/CreatePool.tsx#L63-L63)
+
+## Questions or issues?
+
+File an issue on this repository or join the community [Discord](https://discord.gg/JcrH65zXK3).
