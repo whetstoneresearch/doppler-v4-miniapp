@@ -2,7 +2,7 @@ import { useParams, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { GraphQLClient } from "graphql-request"
 import { Pool } from "@/utils/graphql"
-import { Address, formatEther, Hex, maxUint256, parseEther, zeroAddress } from "viem"
+import { Address, formatEther, Hex, maxUint256, parseAbi, parseEther, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
@@ -58,17 +58,6 @@ const dn404Abi = [
     outputs: [ { name: '', type: 'uint256' } ],
   },
   // decimals() read is not needed for freeze math (UNIT is not decimals); omitted
-  // Alternative enumeration helper: returns tokenId at owner's index
-  {
-    name: 'tokenOfOwnerByIndex',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'owner', type: 'address' },
-      { name: 'index', type: 'uint256' },
-    ],
-    outputs: [ { name: 'id', type: 'uint256' } ],
-  },
 ] as const
 
 // ERC721 ABI for NFT functions
@@ -79,6 +68,25 @@ const erc721Abi = [
     stateMutability: 'view',
     inputs: [{ name: 'owner', type: 'address' }],
     outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'tokenOfOwnerByIndex',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'index', type: 'uint256' },
+    ],
+    outputs: [{ name: 'tokenId', type: 'uint256' }],
+  },
+  {
+    name: 'tokenByIndex',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'index', type: 'uint256' },
+    ],
+    outputs: [{ name: 'tokenId', type: 'uint256' }],
   },
   {
     name: 'totalSupply',
@@ -177,6 +185,8 @@ export default function PoolDetails() {
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
   const [isBuying, setIsBuying] = useState(true)
+  const [isApproving, setIsApproving] = useState(false)
+  const [needsApproval, setNeedsApproval] = useState<boolean>(false)
   const [nftAddress, setNftAddress] = useState<Address | null>(null)
   const [nftData, setNftData] = useState<Array<{
     tokenId: number
@@ -184,13 +194,22 @@ export default function PoolDetails() {
     imageUrl: string
     metadata: any
   }>>([])
+  // User-owned NFTs (derived from balanceOf + tokenOfOwnerByIndex)
+  const [myNftData, setMyNftData] = useState<Array<{
+    tokenId: number
+    owner: Address
+    imageUrl: string
+    metadata: any
+  }>>([])
+  // Triggers refetch of All NFTs list
+  const [nftReloadNonce, setNftReloadNonce] = useState<number>(0)
   const [loadingNfts, setLoadingNfts] = useState(false)
-  const [nftTotalSupply, setNftTotalSupply] = useState<number>(0)
+  // Total supply no longer used for rendering; user-owned list drives UI
   const [showOnlyMine, setShowOnlyMine] = useState<boolean>(false)
   // DN404 freezing-related state
   const [frozenBalanceRaw, setFrozenBalanceRaw] = useState<bigint | null>(null)
-  // Note: UNIT (tokens per NFT) is not exposed on-chain; default to 1000 for Doppler404
-  const DN404_DEFAULT_UNIT = 1000n
+  // Note: UNIT (tokens per NFT) is not exposed on-chain; default to 1000e18 for Doppler404
+  const DN404_DEFAULT_UNIT = parseEther('1000')
   const [ownedIdsOrdered, setOwnedIdsOrdered] = useState<number[] | null>(null)
   const [supportsTokenOfOwnerByIndex, setSupportsTokenOfOwnerByIndex] = useState<boolean>(false)
   const [freezeMode, setFreezeMode] = useState<boolean>(false)
@@ -360,7 +379,7 @@ export default function PoolDetails() {
           setFrozenBalanceRaw(null)
         }
 
-        // Prefer standard ERC721Enumerable-style: tokenOfOwnerByIndex
+        // Prefer standard ERC721Enumerable-style on the ERC721 mirror: tokenOfOwnerByIndex
         try {
           if (!nftMirrorAddress) throw new Error('No NFT mirror to get balance')
           const bal = await publicClient.readContract({
@@ -372,8 +391,8 @@ export default function PoolDetails() {
           const count = typeof bal === 'bigint' ? Number(bal) : Number(bal as any)
           if (count > 0) {
             const calls = Array.from({ length: Math.min(count, 512) }, (_, i) => ({
-              address: pool.baseToken.address as Address,
-              abi: dn404Abi,
+              address: nftMirrorAddress as Address,
+              abi: erc721Abi,
               functionName: 'tokenOfOwnerByIndex' as const,
               args: [account.address as Address, BigInt(i)],
             }))
@@ -414,6 +433,192 @@ export default function PoolDetails() {
     address: account.address,
     token: pool?.quoteToken.address as Address,
   })
+
+  // Minimal ERC20 ABI for approvals and allowances
+  const erc20Abi = [
+    {
+      name: 'allowance',
+      type: 'function',
+      stateMutability: 'view',
+      inputs: [ { name: 'owner', type: 'address' }, { name: 'spender', type: 'address' } ],
+      outputs: [ { name: '', type: 'uint256' } ],
+    },
+    {
+      name: 'approve',
+      type: 'function',
+      stateMutability: 'nonpayable',
+      inputs: [ { name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' } ],
+      outputs: [ { name: '', type: 'bool' } ],
+    },
+  ] as const
+
+  // Permit2 typed data + ABI for allowance nonce lookup
+  const permit2Abi = parseAbi([
+    'function allowance(address user, address token, address spender) external view returns (uint160 amount, uint48 expiration, uint48 nonce)'
+  ])
+
+  const PERMIT2_EIP712_DOMAIN = (permit2Address: Address) => ({
+    name: 'Permit2',
+    chainId,
+    verifyingContract: permit2Address,
+  })
+
+  // Helper: refresh user's NFT list using balanceOf + tokenOfOwnerByIndex
+  const refreshUserNfts = async () => {
+    try {
+      if (!nftAddress || !publicClient || !account?.address) return
+
+      // Read user's balance
+      const bal = await publicClient.readContract({
+        address: nftAddress as Address,
+        abi: erc721Abi,
+        functionName: 'balanceOf',
+        args: [account.address as Address],
+      })
+      const count = typeof bal === 'bigint' ? Number(bal) : Number(bal as any)
+
+      if (count === 0) {
+        setOwnedIdsOrdered([])
+        setMyNftData([])
+        setSupportsTokenOfOwnerByIndex(true)
+        return
+      }
+
+      // Fetch token IDs via tokenOfOwnerByIndex in chunks
+      const CHUNK = 512
+      const tokenIds: number[] = []
+      for (let start = 0; start < count; start += CHUNK) {
+        const end = Math.min(start + CHUNK, count)
+        const calls = [] as any[]
+        for (let i = start; i < end; i++) {
+          calls.push({
+            address: nftAddress as Address,
+            abi: erc721Abi,
+            functionName: 'tokenOfOwnerByIndex' as const,
+            args: [account.address as Address, BigInt(i)],
+          })
+        }
+        const res = await publicClient.multicall({ contracts: calls })
+        for (let i = 0; i < res.length; i++) {
+          const r = res[i]
+          if (r.status === 'success' && typeof r.result === 'bigint') {
+            tokenIds.push(Number(r.result))
+          }
+        }
+      }
+
+      // Update ownedIdsOrdered to align freeze view
+      setOwnedIdsOrdered(tokenIds)
+      setSupportsTokenOfOwnerByIndex(true)
+
+      // Fetch metadata for each owned token
+      const nftPromises: Promise<{
+        tokenId: number
+        owner: Address
+        imageUrl: string
+        metadata: any
+      } | null>[] = tokenIds.map((tokenId) => (async () => {
+        try {
+          const tokenURI = await publicClient.readContract({
+            address: nftAddress as Address,
+            abi: erc721Abi,
+            functionName: 'tokenURI',
+            args: [BigInt(tokenId)],
+          })
+          let imageUrl = ''
+          let metadata: any = null
+          if (tokenURI) {
+            try {
+              let metadataUrl = tokenURI as string
+              if (metadataUrl.startsWith('ipfs://')) {
+                metadataUrl = metadataUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+              }
+              const response = await fetch(metadataUrl)
+              metadata = await response.json()
+              if (metadata?.image) {
+                imageUrl = metadata.image
+                if (imageUrl.startsWith('ipfs://')) {
+                  imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                }
+              }
+            } catch (err) {
+              console.error('Error fetching metadata for token', tokenId, err)
+            }
+          }
+          return { tokenId, owner: account.address as Address, imageUrl, metadata }
+        } catch (e) {
+          console.error('Error building my NFT item for token', tokenId, e)
+          return null
+        }
+      })())
+
+      const ownedItems = (await Promise.all(nftPromises)).filter(Boolean) as Array<{ tokenId: number; owner: Address; imageUrl: string; metadata: any }>
+      setMyNftData(ownedItems)
+    } catch (e) {
+      console.error('refreshUserNfts failed', e)
+    }
+  }
+
+  // Helper: resolve tokenIn address for current buy/sell direction
+  const getTokenInAddress = (): Address | null => {
+    if (!pool) return null
+    const baseTokenAddress = getCurrencyAddress(pool.baseToken.address as Address)
+    const quoteTokenAddress = getCurrencyAddress(pool.quoteToken.address as Address)
+    return isBuying ? quoteTokenAddress : baseTokenAddress
+  }
+
+  // Pre-check allowance or permit requirement when selling
+  useEffect(() => {
+    const check = async () => {
+      try {
+        setNeedsApproval(false)
+        if (!publicClient || !account.address || !pool) return
+        if (!amount) return
+        if (isBuying) return // approvals needed for selling ERC20 (base token)
+
+        const tokenIn = getTokenInAddress()
+        if (!tokenIn || tokenIn === zeroAddress) return
+
+        const required = parseEther(amount)
+
+        // Prefer checking Permit2 allowance for the universalRouter (spender)
+        try {
+          const [permitAmount] = await publicClient.readContract({
+            address: addresses.permit2 as Address,
+            abi: permit2Abi,
+            functionName: 'allowance',
+            args: [account.address as Address, tokenIn, universalRouter as Address],
+          }) as unknown as [bigint, bigint, bigint]
+
+          if (permitAmount < required) {
+            setNeedsApproval(true)
+            return
+          }
+        } catch {
+          // Fallback: check ERC20 allowance to Universal Router (some flows allow direct transferFrom)
+          try {
+            const allowance = await publicClient.readContract({
+              address: tokenIn,
+              abi: erc20Abi,
+              functionName: 'allowance',
+              args: [account.address as Address, universalRouter as Address],
+            }) as bigint
+            if (allowance < required) {
+              setNeedsApproval(true)
+              return
+            }
+          } catch {
+            setNeedsApproval(true)
+            return
+          }
+        }
+      } catch (e) {
+        console.warn('Allowance check failed, defaulting to require approval', e)
+        setNeedsApproval(!isBuying)
+      }
+    }
+    check()
+  }, [amount, isBuying, pool?.address, account.address, publicClient, chainId])
 
   // Helper function to properly handle currency addresses and sorting
   const getCurrencyAddress = (address: Address): Address => {
@@ -565,15 +770,18 @@ export default function PoolDetails() {
             return null
           }
           
-          // For DopplerLens, we need to use isToken0 from the V4 config
-          // The test shows: zeroForOne: !isToken0
-          const isToken0 = pool.v4Config?.isToken0 ?? pool.isToken0 ?? true
-          const zeroForOne = !isToken0
+          // Determine swap direction exactly like we do for actual swaps
+          // Figure out whether the base token is currency0 or currency1
+          const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
+          const curr0Lower = (key.currency0 as Address).toLowerCase()
+          const isBaseToken0 = baseTokenAddr === curr0Lower
+          // For buying (quote -> base) we need tokenOut = base
+          // For selling (base -> quote) we need tokenOut = quote
+          const zeroForOne = isBuying ? !isBaseToken0 : isBaseToken0
           
           console.log('Using DopplerLens:', dopplerLensAddress)
           console.log('Dynamic auction quote params', { 
-            key, 
-            isToken0,
+            key,
             zeroForOne, 
             amountIn: amountIn.toString(), 
             hookData: '0x' 
@@ -596,12 +804,9 @@ export default function PoolDetails() {
               args: [params],
             })
             
-            // DopplerLens returns amount0 and amount1 - we need the appropriate one
-            // If buying (swapping quote for base), we want the base amount out
-            // If selling (swapping base for quote), we want the quote amount out
-            const amountOut = isBuying 
-              ? (isToken0 ? result.amount0 : result.amount1)  // Getting base token
-              : (isToken0 ? result.amount1 : result.amount0)  // Getting quote token
+            // DopplerLens returns amounts for token0 and token1. The out token is
+            // token1 when zeroForOne is true (0 -> 1) else token0 (1 -> 0).
+            const amountOut = zeroForOne ? result.amount1 : result.amount0
               
             console.log('DopplerLens result:', result, 'amountOut:', amountOut)
             return amountOut
@@ -772,7 +977,57 @@ export default function PoolDetails() {
         const [actions, params] = actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, 0n, "0x")
         .addAction(V4ActionType.SETTLE_ALL, [zeroForOne ? key.currency0 : key.currency1, maxUint256])
         .addAction(V4ActionType.TAKE_ALL, [zeroForOne ? key.currency1 : key.currency0, 0]).build()
-        const [commands, inputs] = new CommandBuilder().addV4Swap(actions, params).build()
+
+        // Build commands, prepending Permit2 permit if selling ERC20
+        const builder = new CommandBuilder()
+        if (!isBuying) {
+          const tokenIn = getTokenInAddress() as Address
+          if (tokenIn && tokenIn !== zeroAddress) {
+            // Prepare and sign Permit2 if needed
+            const required = amountIn
+            const permit2Addr = addresses.permit2 as Address
+            // Fetch current nonce for (user, token, spender=universalRouter)
+            const [, , nonce] = await publicClient.readContract({
+              address: permit2Addr,
+              abi: permit2Abi,
+              functionName: 'allowance',
+              args: [account.address as Address, tokenIn, universalRouter as Address],
+            }) as unknown as [bigint, bigint, bigint]
+            const nowSec = BigInt(Math.floor(Date.now() / 1000))
+            const permit = {
+              details: {
+                token: tokenIn,
+                amount: required,
+                expiration: nowSec + 3600n, // 1 hour
+                nonce: BigInt(nonce),
+              },
+              spender: universalRouter as Address,
+              sigDeadline: nowSec + 3600n,
+            }
+            const signature = await walletClient.signTypedData({
+              account: account.address as Address,
+              domain: PERMIT2_EIP712_DOMAIN(permit2Addr),
+              types: {
+                PermitDetails: [
+                  { name: 'token', type: 'address' },
+                  { name: 'amount', type: 'uint160' },
+                  { name: 'expiration', type: 'uint48' },
+                  { name: 'nonce', type: 'uint48' },
+                ],
+                PermitSingle: [
+                  { name: 'details', type: 'PermitDetails' },
+                  { name: 'spender', type: 'address' },
+                  { name: 'sigDeadline', type: 'uint256' },
+                ],
+              },
+              primaryType: 'PermitSingle',
+              message: permit as any,
+            })
+            builder.addPermit2Permit(permit as any, signature as Hex)
+          }
+        }
+
+        const [commands, inputs] = builder.addV4Swap(actions, params).build()
 
         const txHash = await walletClient?.writeContract({
           address: universalRouter,
@@ -783,79 +1038,20 @@ export default function PoolDetails() {
         })
         if (txHash) {
           const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
-          if (receipt.status === 'success' && isBuying && nftAddress) {
-            await new Promise((r) => setTimeout(r, 2000))
-            const prevSupply = nftTotalSupply
+          if (receipt.status === 'success' && nftAddress) {
+            // Refresh user's NFT view after any buy or sell affecting DN404
+            await new Promise((r) => setTimeout(r, 1000))
+            await refreshUserNfts()
             try {
-              const latestSupplyBn = await publicClient.readContract({
-                address: nftAddress,
-                abi: erc721Abi,
-                functionName: 'totalSupply',
+              const fb = await publicClient.readContract({
+                address: pool.baseToken.address as Address,
+                abi: dn404Abi,
+                functionName: 'frozenBalances',
+                args: [account.address as Address],
               })
-              const latestSupply = Number(latestSupplyBn)
-              if (latestSupply > prevSupply) {
-                // Only fetch up to 100 to stay within the gallery limit
-                const start = Math.max(prevSupply + 1, 1)
-                const end = Math.min(latestSupply, 100)
-                // Fetch and append newly minted NFTs
-                const nftPromises: Promise<{
-                  tokenId: number
-                  owner: Address
-                  imageUrl: string
-                  metadata: any
-                } | null>[] = []
-                for (let tokenId = start; tokenId <= end; tokenId++) {
-                  nftPromises.push((async () => {
-                    try {
-                      const owner = await publicClient.readContract({
-                        address: nftAddress,
-                        abi: erc721Abi,
-                        functionName: 'ownerOf',
-                        args: [BigInt(tokenId)],
-                      })
-                      const tokenURI = await publicClient.readContract({
-                        address: nftAddress,
-                        abi: erc721Abi,
-                        functionName: 'tokenURI',
-                        args: [BigInt(tokenId)],
-                      })
-                      let imageUrl = ''
-                      let metadata: any = null
-                      if (tokenURI) {
-                        try {
-                          let metadataUrl = tokenURI as string
-                          if (metadataUrl.startsWith('ipfs://')) {
-                            metadataUrl = metadataUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
-                          }
-                          const response = await fetch(metadataUrl)
-                          metadata = await response.json()
-                          if (metadata?.image) {
-                            imageUrl = metadata.image
-                            if (imageUrl.startsWith('ipfs://')) {
-                              imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
-                            }
-                          }
-                        } catch (err) {
-                          console.error('Error fetching metadata for token', tokenId, err)
-                        }
-                      }
-                      return { tokenId, owner: owner as Address, imageUrl, metadata }
-                    } catch (err) {
-                      console.error('Error fetching new NFT data for token', tokenId, err)
-                      return null
-                    }
-                  })())
-                }
-                const results = await Promise.all(nftPromises)
-                const newItems = results.filter(Boolean) as typeof nftData
-                if (newItems.length) {
-                  setNftData((prev) => [...prev, ...newItems])
-                }
-                setNftTotalSupply(latestSupply)
-              }
-            } catch (e) {
-              console.error('Error refreshing NFTs after buy (V4):', e)
-            }
+              setFrozenBalanceRaw(BigInt(fb as any))
+            } catch {}
+            setNftReloadNonce((x) => x + 1)
           }
         }
       } catch (error) {
@@ -880,6 +1076,54 @@ export default function PoolDetails() {
         
         // Build the command for UniversalRouter
         const commandBuilder = new CommandBuilder()
+
+        // If selling ERC20, prepend Permit2 permit + transferFrom
+        if (!isBuying) {
+          const tokenIn = getTokenInAddress() as Address
+          if (tokenIn && tokenIn !== zeroAddress) {
+            const required = amountIn
+            const permit2Addr = addresses.permit2 as Address
+            const [, , nonce] = await publicClient.readContract({
+              address: permit2Addr,
+              abi: permit2Abi,
+              functionName: 'allowance',
+              args: [account.address as Address, tokenIn, universalRouter as Address],
+            }) as unknown as [bigint, bigint, bigint]
+            const nowSec = BigInt(Math.floor(Date.now() / 1000))
+            const permit = {
+              details: {
+                token: tokenIn,
+                amount: required,
+                expiration: nowSec + 3600n,
+                nonce: BigInt(nonce),
+              },
+              spender: universalRouter as Address,
+              sigDeadline: nowSec + 3600n,
+            }
+            const signature = await walletClient.signTypedData({
+              account: account.address as Address,
+              domain: PERMIT2_EIP712_DOMAIN(permit2Addr),
+              types: {
+                PermitDetails: [
+                  { name: 'token', type: 'address' },
+                  { name: 'amount', type: 'uint160' },
+                  { name: 'expiration', type: 'uint48' },
+                  { name: 'nonce', type: 'uint48' },
+                ],
+                PermitSingle: [
+                  { name: 'details', type: 'PermitDetails' },
+                  { name: 'spender', type: 'address' },
+                  { name: 'sigDeadline', type: 'uint256' },
+                ],
+              },
+              primaryType: 'PermitSingle',
+              message: permit as any,
+            })
+            commandBuilder.addPermit2Permit(permit as any, signature as Hex)
+            // Ensure router has tokens to execute V3 swap
+            commandBuilder.addPermit2TransferFrom(tokenIn, universalRouter as Address, required)
+          }
+        }
         
         // If buying with ETH, we need to wrap it first
         const isEthInput = isBuying && quoteTokenAddress === addresses.weth
@@ -907,77 +1151,19 @@ export default function PoolDetails() {
         })
         if (txHash) {
           const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
-          if (receipt.status === 'success' && isBuying && nftAddress) {
-            await new Promise((r) => setTimeout(r, 2000))
-            const prevSupply = nftTotalSupply
+          if (receipt.status === 'success' && nftAddress) {
+            await new Promise((r) => setTimeout(r, 1000))
+            await refreshUserNfts()
             try {
-              const latestSupplyBn = await publicClient.readContract({
-                address: nftAddress,
-                abi: erc721Abi,
-                functionName: 'totalSupply',
+              const fb = await publicClient.readContract({
+                address: pool.baseToken.address as Address,
+                abi: dn404Abi,
+                functionName: 'frozenBalances',
+                args: [account.address as Address],
               })
-              const latestSupply = Number(latestSupplyBn)
-              if (latestSupply > prevSupply) {
-                const start = Math.max(prevSupply + 1, 1)
-                const end = Math.min(latestSupply, 100)
-                const nftPromises: Promise<{
-                  tokenId: number
-                  owner: Address
-                  imageUrl: string
-                  metadata: any
-                } | null>[] = []
-                for (let tokenId = start; tokenId <= end; tokenId++) {
-                  nftPromises.push((async () => {
-                    try {
-                      const owner = await publicClient.readContract({
-                        address: nftAddress,
-                        abi: erc721Abi,
-                        functionName: 'ownerOf',
-                        args: [BigInt(tokenId)],
-                      })
-                      const tokenURI = await publicClient.readContract({
-                        address: nftAddress,
-                        abi: erc721Abi,
-                        functionName: 'tokenURI',
-                        args: [BigInt(tokenId)],
-                      })
-                      let imageUrl = ''
-                      let metadata: any = null
-                      if (tokenURI) {
-                        try {
-                          let metadataUrl = tokenURI as string
-                          if (metadataUrl.startsWith('ipfs://')) {
-                            metadataUrl = metadataUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
-                          }
-                          const response = await fetch(metadataUrl)
-                          metadata = await response.json()
-                          if (metadata?.image) {
-                            imageUrl = metadata.image
-                            if (imageUrl.startsWith('ipfs://')) {
-                              imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
-                            }
-                          }
-                        } catch (err) {
-                          console.error('Error fetching metadata for token', tokenId, err)
-                        }
-                      }
-                      return { tokenId, owner: owner as Address, imageUrl, metadata }
-                    } catch (err) {
-                      console.error('Error fetching new NFT data for token', tokenId, err)
-                      return null
-                    }
-                  })())
-                }
-                const results = await Promise.all(nftPromises)
-                const newItems = results.filter(Boolean) as typeof nftData
-                if (newItems.length) {
-                  setNftData((prev) => [...prev, ...newItems])
-                }
-                setNftTotalSupply(latestSupply)
-              }
-            } catch (e) {
-              console.error('Error refreshing NFTs after buy (V3):', e)
-            }
+              setFrozenBalanceRaw(BigInt(fb as any))
+            } catch {}
+            setNftReloadNonce((x) => x + 1)
           }
         }
         console.log("V3 swap executed successfully")
@@ -1047,74 +1233,75 @@ export default function PoolDetails() {
         })
         
         const nftCount = Number(totalSupply)
-        setNftTotalSupply(nftCount)
         console.log('Total NFT supply:', nftCount)
         
-        // Fetch data for each NFT
-        const nftPromises = []
-        for (let tokenId = 1; tokenId <= Math.min(nftCount, 100); tokenId++) { // Limit to 100 for performance
-          nftPromises.push(
-            (async () => {
+        // Prefer ERC721Enumerable's tokenByIndex to enumerate all token IDs
+        const LIMIT = Math.min(nftCount, 100) // cap for performance
+        let tokenIds: number[] = []
+        try {
+          const calls = Array.from({ length: LIMIT }, (_, i) => ({
+            address: nftAddress,
+            abi: erc721Abi,
+            functionName: 'tokenByIndex' as const,
+            args: [BigInt(i)],
+          }))
+          const res = await publicClient.multicall({ contracts: calls })
+          for (const r of res) {
+            if (r.status === 'success' && typeof r.result === 'bigint') {
+              tokenIds.push(Number(r.result))
+            }
+          }
+          // Fallback: if none returned, fall back to naive 1..LIMIT
+          if (tokenIds.length === 0) throw new Error('tokenByIndex returned no results')
+        } catch (e) {
+          console.warn('tokenByIndex unavailable or failed, falling back to contiguous IDs', e)
+          tokenIds = Array.from({ length: LIMIT }, (_, i) => i + 1)
+        }
+
+        // Fetch data for each discovered tokenId
+        const nftPromises = tokenIds.map((tokenId) => (async () => {
+          try {
+            const owner = await publicClient.readContract({
+              address: nftAddress,
+              abi: erc721Abi,
+              functionName: 'ownerOf',
+              args: [BigInt(tokenId)],
+            })
+            const tokenURI = await publicClient.readContract({
+              address: nftAddress,
+              abi: erc721Abi,
+              functionName: 'tokenURI',
+              args: [BigInt(tokenId)],
+            })
+            let imageUrl = ''
+            let metadata: any = null
+            if (tokenURI) {
               try {
-                // Get owner
-                const owner = await publicClient.readContract({
-                  address: nftAddress,
-                  abi: erc721Abi,
-                  functionName: 'ownerOf',
-                  args: [BigInt(tokenId)],
-                })
-                
-                // Get tokenURI
-                const tokenURI = await publicClient.readContract({
-                  address: nftAddress,
-                  abi: erc721Abi,
-                  functionName: 'tokenURI',
-                  args: [BigInt(tokenId)],
-                })
-                
-                // Fetch metadata from URI
-                let imageUrl = ''
-                let metadata = null
-                
-                if (tokenURI) {
-                  try {
-                    // Handle IPFS URIs
-                    let metadataUrl = tokenURI
-                    if (tokenURI.startsWith('ipfs://')) {
-                      metadataUrl = tokenURI.replace('ipfs://', 'https://ipfs.io/ipfs/')
-                    }
-                    
-                    const response = await fetch(metadataUrl)
-                    metadata = await response.json()
-                    
-                    // Get image URL from metadata
-                    if (metadata.image) {
-                      imageUrl = metadata.image
-                      if (imageUrl.startsWith('ipfs://')) {
-                        imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
-                      }
-                    }
-                  } catch (error) {
-                    console.error('Error fetching metadata for token', tokenId, error)
+                let metadataUrl = tokenURI as string
+                if (metadataUrl.startsWith('ipfs://')) {
+                  metadataUrl = metadataUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
+                }
+                const response = await fetch(metadataUrl)
+                metadata = await response.json()
+                if (metadata?.image) {
+                  imageUrl = metadata.image
+                  if (imageUrl.startsWith('ipfs://')) {
+                    imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
                   }
                 }
-                
-                return {
-                  tokenId,
-                  owner: owner as Address,
-                  imageUrl,
-                  metadata,
-                }
               } catch (error) {
-                console.error('Error fetching NFT data for token', tokenId, error)
-                return null
+                console.error('Error fetching metadata for token', tokenId, error)
               }
-            })()
-          )
-        }
-        
+            }
+            return { tokenId, owner: owner as Address, imageUrl, metadata }
+          } catch (error) {
+            console.error('Error fetching NFT data for token', tokenId, error)
+            return null
+          }
+        })())
+
         const results = await Promise.all(nftPromises)
-        const validResults = results.filter(r => r !== null) as typeof nftData
+        const validResults = results.filter((r): r is { tokenId: number; owner: Address; imageUrl: string; metadata: any } => r !== null)
         setNftData(validResults)
       } catch (error) {
         console.error('Error fetching NFT data:', error)
@@ -1124,7 +1311,13 @@ export default function PoolDetails() {
     }
     
     fetchNftData()
-  }, [nftAddress, publicClient])
+  }, [nftAddress, publicClient, nftReloadNonce])
+
+  // Keep user's NFT list up-to-date whenever address or nftAddress changes
+  useEffect(() => {
+    if (!nftAddress || !account?.address) return
+    refreshUserNfts()
+  }, [nftAddress, account?.address])
 
   // DN404 freeze helpers and actions
   const frozenNftCount = (() => {
@@ -1159,14 +1352,70 @@ export default function PoolDetails() {
     setIsFreezing(true)
     try {
       let indexes: bigint[] = []
-      if (supportsTokenOfOwnerByIndex && ownedIdsOrdered) {
-        const idxs: number[] = []
-        for (const tid of selectedTokenIds) {
-          const idx = tokenIdToIndex(tid)
-          if (idx !== null) idxs.push(idx)
+      if (supportsTokenOfOwnerByIndex && nftMirrorAddress) {
+        // First try to resolve using our cached ordering
+        const selectedArray = Array.from(selectedTokenIds)
+        const initialIdxs: Array<number | null> = selectedArray.map((tid) => tokenIdToIndex(tid))
+
+        // If any are missing, build a fresh owner index map by scanning the mirror
+        let resolvedIdxs: number[] = []
+        if (initialIdxs.every((v) => typeof v === 'number')) {
+          resolvedIdxs = initialIdxs as number[]
+        } else {
+          // Build a full tokenId -> index map for the owner
+          const bal = await publicClient.readContract({
+            address: nftMirrorAddress as Address,
+            abi: erc721Abi,
+            functionName: 'balanceOf',
+            args: [account.address as Address],
+          })
+          const count = typeof bal === 'bigint' ? Number(bal) : Number(bal as any)
+
+          const CHUNK = 512
+          const map = new Map<number, number>()
+          for (let start = 0; start < count; start += CHUNK) {
+            const end = Math.min(start + CHUNK, count)
+            const calls = [] as any[]
+            for (let i = start; i < end; i++) {
+              calls.push({
+                address: nftMirrorAddress as Address,
+                abi: erc721Abi,
+                functionName: 'tokenOfOwnerByIndex' as const,
+                args: [account.address as Address, BigInt(i)],
+              })
+            }
+            const res = await publicClient.multicall({ contracts: calls })
+            for (let i = 0; i < res.length; i++) {
+              const r = res[i]
+              if (r.status === 'success' && typeof r.result === 'bigint') {
+                const tokenId = Number(r.result)
+                map.set(tokenId, start + i)
+              }
+            }
+          }
+
+          // Try resolving again from the map
+          resolvedIdxs = selectedArray
+            .map((tid) => {
+              const idx = map.get(tid)
+              return typeof idx === 'number' ? idx : null
+            })
+            .filter((v): v is number => v !== null)
+
+          // Update local cache if we built a more complete set
+          if (map.size > 0) {
+            const ordered = Array.from(map.entries())
+              .sort((a, b) => a[1] - b[1])
+              .map(([tid]) => tid)
+            setOwnedIdsOrdered(ordered)
+          }
         }
-        if (idxs.length === 0) throw new Error('Could not resolve token indices for selection')
-        indexes = idxs.map(n => BigInt(n))
+
+        if (resolvedIdxs.length === 0) {
+          throw new Error('Could not resolve token indices for selection. Try toggling Freeze mode off/on or refreshing the page.')
+        }
+
+        indexes = resolvedIdxs.map((n) => BigInt(n))
       } else {
         throw new Error('This token does not expose owned indices; use Freeze Next N instead')
       }
@@ -1202,8 +1451,8 @@ export default function PoolDetails() {
           const n = Math.min(count, 512)
           if (n > 0) {
             const calls = Array.from({ length: n }, (_, i) => ({
-              address: pool.baseToken.address as Address,
-              abi: dn404Abi,
+              address: nftMirrorAddress as Address,
+              abi: erc721Abi,
               functionName: 'tokenOfOwnerByIndex' as const,
               args: [account.address as Address, BigInt(i)],
             }))
@@ -1223,6 +1472,8 @@ export default function PoolDetails() {
         }
       } catch {}
       setSelectedTokenIds(new Set())
+      await refreshUserNfts()
+      setNftReloadNonce((x) => x + 1)
     } catch (e) {
       console.error('Freeze selected failed', e)
       alert(e instanceof Error ? e.message : 'Freeze failed')
@@ -1236,6 +1487,76 @@ export default function PoolDetails() {
   const handleSwap = () => {
     if (!amount || !quotedAmount) return
     executeSwap(parseEther(amount))
+  }
+
+  const handleApprove = async () => {
+    if (!pool || !account.address || !walletClient || !publicClient) return
+    const tokenIn = getTokenInAddress()
+    if (!tokenIn || tokenIn === zeroAddress) return
+    const required = parseEther(amount || '0')
+    if (required === 0n) return
+
+    setIsApproving(true)
+    try {
+      // Prefer Permit2 signature approval
+      try {
+        const permit2Addr = addresses.permit2 as Address
+        const [, , nonce] = await publicClient.readContract({
+          address: permit2Addr,
+          abi: permit2Abi,
+          functionName: 'allowance',
+          args: [account.address as Address, tokenIn, universalRouter as Address],
+        }) as unknown as [bigint, bigint, bigint]
+        const nowSec = BigInt(Math.floor(Date.now() / 1000))
+        const permit = {
+          details: {
+            token: tokenIn,
+            amount: required,
+            expiration: nowSec + 3600n, // 1 hour
+            nonce: BigInt(nonce),
+          },
+          spender: universalRouter as Address,
+          sigDeadline: nowSec + 3600n,
+        }
+        await walletClient.signTypedData({
+          account: account.address as Address,
+          domain: PERMIT2_EIP712_DOMAIN(permit2Addr),
+          types: {
+            PermitDetails: [
+              { name: 'token', type: 'address' },
+              { name: 'amount', type: 'uint160' },
+              { name: 'expiration', type: 'uint48' },
+              { name: 'nonce', type: 'uint48' },
+            ],
+            PermitSingle: [
+              { name: 'details', type: 'PermitDetails' },
+              { name: 'spender', type: 'address' },
+              { name: 'sigDeadline', type: 'uint256' },
+            ],
+          },
+          primaryType: 'PermitSingle',
+          message: permit as any,
+        })
+        setNeedsApproval(false)
+        return
+      } catch (e) {
+        console.warn('Permit2 signature failed, falling back to ERC20 approve', e)
+      }
+
+      // Fallback to on-chain ERC20 approve to Universal Router
+      const txHash = await walletClient.writeContract({
+        address: tokenIn as Address,
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [universalRouter as Address, required],
+      })
+      await publicClient.waitForTransactionReceipt({ hash: txHash })
+      setNeedsApproval(false)
+    } catch (e) {
+      console.error('Approval failed', e)
+    } finally {
+      setIsApproving(false)
+    }
   }
 
   // Helper function to truncate addresses
@@ -1438,13 +1759,23 @@ export default function PoolDetails() {
           </TabsContent>
         </Tabs>
 
-        <Button 
-          onClick={handleSwap}
-          className="w-full mt-4"
-          disabled={!amount || !quotedAmount}
-        >
-          Swap
-        </Button>
+        {(!isBuying && needsApproval) ? (
+          <Button 
+            onClick={handleApprove}
+            className="w-full mt-4"
+            disabled={!amount || isApproving}
+          >
+            {isApproving ? 'Approving…' : 'Approve'}
+          </Button>
+        ) : (
+          <Button 
+            onClick={handleSwap}
+            className="w-full mt-4"
+            disabled={!amount || !quotedAmount}
+          >
+            Swap
+          </Button>
+        )}
       </div>
 
       {/* NFT Gallery for Doppler404 tokens */}
@@ -1476,6 +1807,8 @@ export default function PoolDetails() {
                     checked={freezeMode}
                     onChange={(e) => {
                       setFreezeMode(e.target.checked)
+                      // Reset selections when toggling freeze mode to avoid stale UI state
+                      setSelectedTokenIds(new Set())
                       if (e.target.checked) setShowOnlyMine(true)
                     }}
                     className="h-4 w-4 accent-primary"
@@ -1511,16 +1844,42 @@ export default function PoolDetails() {
             <div className="text-center py-8">
               <p className="text-muted-foreground">Loading NFTs...</p>
             </div>
-          ) : ((showOnlyMine && account?.address) ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()).length > 0 : nftData.length > 0) ? (
+          ) : (((showOnlyMine && account?.address) ? myNftData.length : nftData.length) > 0) ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {(showOnlyMine && account?.address ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()) : nftData).map((nft) => {
+              {(() => {
+                const baseList = (showOnlyMine && account?.address) ? [...myNftData] : [...nftData]
+                baseList.sort((a, b) => {
+                  const ia = tokenIdToIndex(a.tokenId)
+                  const ib = tokenIdToIndex(b.tokenId)
+                  const ai = ia === null ? Number.MAX_SAFE_INTEGER : ia
+                  const bi = ib === null ? Number.MAX_SAFE_INTEGER : ib
+                  return ai - bi
+                })
+                return baseList
+              })().map((nft) => {
                 const isMine = account?.address && nft.owner.toLowerCase() === (account.address as string).toLowerCase()
                 const idx = isMine ? tokenIdToIndex(nft.tokenId) : null
                 const isFrozen = typeof idx === 'number' && typeof frozenNftCount === 'number' && idx < frozenNftCount
                 const selected = selectedTokenIds.has(nft.tokenId)
                 return (
                 <div key={nft.tokenId} className="flex flex-col space-y-2">
-                  <div className="relative aspect-square rounded-lg overflow-hidden bg-background/50 border border-input">
+                  <div
+                    className={`relative aspect-square rounded-lg overflow-hidden bg-background/50 border ${selected ? 'border-primary ring-2 ring-primary/50' : 'border-input'} ${freezeMode && isMine && supportsTokenOfOwnerByIndex ? 'cursor-pointer' : ''}`}
+                    onClick={() => {
+                      if (freezeMode && isMine && supportsTokenOfOwnerByIndex) {
+                        toggleSelectToken(nft.tokenId)
+                      }
+                    }}
+                    role={freezeMode && isMine && supportsTokenOfOwnerByIndex ? 'button' : undefined}
+                    aria-pressed={freezeMode && isMine && supportsTokenOfOwnerByIndex ? (selected ? true : false) : undefined}
+                    tabIndex={freezeMode && isMine && supportsTokenOfOwnerByIndex ? 0 : -1}
+                    onKeyDown={(e) => {
+                      if ((e.key === 'Enter' || e.key === ' ') && freezeMode && isMine && supportsTokenOfOwnerByIndex) {
+                        e.preventDefault()
+                        toggleSelectToken(nft.tokenId)
+                      }
+                    }}
+                  >
                     {nft.imageUrl ? (
                       <img 
                         src={nft.imageUrl} 
@@ -1544,8 +1903,8 @@ export default function PoolDetails() {
                     )}
                     {freezeMode && isMine && supportsTokenOfOwnerByIndex && (
                       <button
-                        className={`absolute m-2 p-1 rounded bg-background/80 border text-xs ${selected ? 'border-primary text-primary' : 'border-muted-foreground/40 text-foreground/80'}`}
-                        onClick={() => toggleSelectToken(nft.tokenId)}
+                        className={`absolute top-2 left-2 p-1 rounded bg-background/80 border text-xs ${selected ? 'border-primary text-primary' : 'border-muted-foreground/40 text-foreground/80'}`}
+                        onClick={(e) => { e.stopPropagation(); toggleSelectToken(nft.tokenId) }}
                         title={selected ? 'Unselect' : 'Select for freeze'}
                       >
                         {selected ? 'Selected' : 'Select'}
@@ -1573,13 +1932,12 @@ export default function PoolDetails() {
             </div>
           )}
           
-          {((showOnlyMine && account?.address) ? nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()).length : nftData.length) > 0 && (
+          {(((showOnlyMine && account?.address) ? myNftData.length : nftData.length) > 0) && (
             <p className="text-xs text-muted-foreground mt-4 text-center">
-              {showOnlyMine && account?.address ? (
-                <>Showing {nftData.filter(n => n.owner.toLowerCase() === (account.address as string).toLowerCase()).length} of {nftData.length} NFTs</>
-              ) : (
-                <>Showing {nftData.length} NFTs {nftData.length >= 100 && '(limited to first 100)'} </>
-              )}
+              {showOnlyMine && account?.address
+                ? <>Showing {myNftData.length} of {nftData.length} NFTs</>
+                : <>Showing {nftData.length} NFTs {nftData.length >= 100 && '(limited to first 100)'} </>
+              }
             </p>
           )}
         </div>
