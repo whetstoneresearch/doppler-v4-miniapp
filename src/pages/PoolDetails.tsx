@@ -2,7 +2,7 @@ import { useParams, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { GraphQLClient } from "graphql-request"
 import { Pool } from "@/utils/graphql"
-import { Address, formatEther, Hex, maxUint256, parseAbi, parseEther, zeroAddress } from "viem"
+import { Address, formatEther, Hex, maxUint256, parseAbi, parseEther, parseUnits, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
@@ -14,6 +14,7 @@ import {
 import { getAddresses } from "@whetstone-research/doppler-sdk"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 import { dopplerLensQuoterAbi } from "@/lib/abis/dopplerLens"
+
 
 // Minimal ABI for UniversalRouter execute function
 const universalRouterAbi = [
@@ -184,9 +185,13 @@ export default function PoolDetails() {
   const publicClient = usePublicClient({ chainId }) as any
   const [amount, setAmount] = useState("")
   const [quotedAmount, setQuotedAmount] = useState<bigint | null>(null)
+  const [lastQuoteReliable, setLastQuoteReliable] = useState<boolean>(false)
   const [isBuying, setIsBuying] = useState(true)
+  // Default slippage in basis points (e.g., 100 = 1%)
+  const DEFAULT_SLIPPAGE_BPS = 100n
   const [isApproving, setIsApproving] = useState(false)
   const [needsApproval, setNeedsApproval] = useState<boolean>(false)
+  const [tokenInDecimals, setTokenInDecimals] = useState<number>(18)
   const [nftAddress, setNftAddress] = useState<Address | null>(null)
   const [nftData, setNftData] = useState<Array<{
     tokenId: number
@@ -322,6 +327,11 @@ export default function PoolDetails() {
       return normalized
     },
   })
+
+  // Determine if auction has not started yet (for V4 dynamic auctions)
+  const auctionStartTime = pool?.v4Config?.startingTime ? Number(pool.v4Config.startingTime) : undefined
+  const nowSec = Math.floor(Date.now() / 1000)
+  const auctionNotStarted = typeof auctionStartTime === 'number' && nowSec < auctionStartTime
 
   // Check if the base token is a DN404 token with NFT mirror
   const { data: nftMirrorAddress } = useQuery({
@@ -463,6 +473,29 @@ export default function PoolDetails() {
     verifyingContract: permit2Address,
   })
 
+  // Detect tokenIn decimals for correct amount parsing
+  useEffect(() => {
+    const run = async () => {
+      try {
+        if (!pool || !publicClient) return
+        const tokenIn = getTokenInAddress()
+        if (!tokenIn || tokenIn === zeroAddress) {
+          setTokenInDecimals(18)
+          console.log('[DECIMALS] tokenIn is native/WETH; using 18')
+          return
+        }
+        const decAbi = parseAbi(['function decimals() view returns (uint8)'])
+        const d = await publicClient.readContract({ address: tokenIn, abi: decAbi, functionName: 'decimals' }) as number
+        setTokenInDecimals(d || 18)
+        console.log('[DECIMALS] tokenIn:', tokenIn, 'decimals:', d)
+      } catch (e) {
+        console.warn('[DECIMALS] failed; defaulting to 18', e)
+        setTokenInDecimals(18)
+      }
+    }
+    run()
+  }, [publicClient, pool?.baseToken.address, pool?.quoteToken.address, isBuying])
+
   // Helper: refresh user's NFT list using balanceOf + tokenOfOwnerByIndex
   const refreshUserNfts = async () => {
     try {
@@ -579,7 +612,12 @@ export default function PoolDetails() {
         const tokenIn = getTokenInAddress()
         if (!tokenIn || tokenIn === zeroAddress) return
 
-        const required = parseEther(amount)
+        let required: bigint = 0n
+        try {
+          required = parseUnits(amount, tokenInDecimals)
+        } catch {
+          required = 0n
+        }
 
         // Prefer checking Permit2 allowance for the universalRouter (spender)
         try {
@@ -683,8 +721,7 @@ export default function PoolDetails() {
   const fetchQuote = async (amountIn: bigint) => {
     if (!pool || !publicClient) return
     
-    console.log('Pool type:', pool.type, 'Pool data:', pool)
-    console.log('Asset migrated status:', pool.asset?.migrated)
+    console.log('[QUOTE] poolType:', pool.type, 'migrated:', pool.asset?.migrated, 'amountIn:', amountIn.toString())
     
     // Check if the pool has migrated to V2
     const isMigrated = pool.asset?.migrated === true
@@ -711,16 +748,16 @@ export default function PoolDetails() {
         // The output amount is the last element in the amounts array
         return amounts[amounts.length - 1]
       } catch (error) {
-        console.error("Error fetching V2 quote:", error)
+        console.error('Error fetching V2 quote:', error)
         return null
       }
     }
     
     // Check if this is a V4 pool with a hook
-    // V4 pools may have type as "v4" (lowercase), "V4", "DynamicAuction", etc.
+    // V4 pools may have type as 'v4' (lowercase), 'V4', 'DynamicAuction', etc.
     const poolType = pool.type?.toLowerCase()
-    const isV4Pool = poolType === "v4" || poolType === "dynamicauction" || 
-                     poolType === "hook" || !pool.type // If type is missing, assume V4
+    const isV4Pool = poolType === 'v4' || poolType === 'dynamicauction' || 
+                     poolType === 'hook' || !pool.type // If type is missing, assume V4
     
     if (isV4Pool && !isMigrated) {
       try {
@@ -745,7 +782,7 @@ export default function PoolDetails() {
         }
         
         if (!currency0 || !currency1) {
-          console.error("Cannot determine currency0/currency1 for V4 pool")
+          console.error('Cannot determine currency0/currency1 for V4 pool')
           return null
         }
         
@@ -758,122 +795,89 @@ export default function PoolDetails() {
           hooks: (pool.hooks || address) as Address,
         }
 
-        // Check if this is a dynamic auction (has v4Config or hooks address)
-        const isDynamicAuction = pool.v4Config || (pool.hooks && pool.hooks !== zeroAddress)
+        // Determine swap direction based on sorted addresses
+        const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
+        const curr0Lower = key.currency0.toLowerCase()
         
+        // Determine if base token is currency0 or currency1
+        const isBaseToken0 = baseTokenAddr === curr0Lower
+        
+        // For buying (quote -> base), we're swapping FROM quote TO base
+        // For selling (base -> quote), we're swapping FROM base TO quote
+        const zeroForOne = isBuying 
+          ? !isBaseToken0  // If buying and base is token1, swap 0->1. If base is token0, swap 1->0
+          : isBaseToken0   // If selling and base is token0, swap 0->1. If base is token1, swap 1->0
+
+        // Dynamic auctions: use SDK Uniswap V4 Quoter helper (identical args to Lens)
+        const isDynamicAuction = !!pool.v4Config
         if (isDynamicAuction) {
-          // Use DopplerLens for dynamic auctions
-          const dopplerLensAddress = addresses.dopplerLens
-          
+          try {
+            const quoter = new Quoter(publicClient, chainId)
+            const quote = await quoter.quoteExactInputV4Quoter({
+              poolKey: key,
+              zeroForOne,
+              exactAmount: amountIn,
+              hookData: '0x',
+            })
+            console.log('[QUOTE][V4][Quoter] amountOut:', quote.amountOut.toString())
+            setLastQuoteReliable(true)
+            return quote.amountOut
+          } catch (e) {
+            console.error('[QUOTE][V4][Quoter] failed, falling back to Lens', e)
+          }
+
+          // Fallback: DopplerLens (indicative only)
+          const dopplerLensAddress = addresses?.dopplerLens
           if (!dopplerLensAddress) {
-            console.error("DopplerLens address not found in addresses")
+            console.error('DopplerLens address not found in addresses')
             return null
           }
-          
-          // Determine swap direction exactly like we do for actual swaps
-          // Figure out whether the base token is currency0 or currency1
-          const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
-          const curr0Lower = (key.currency0 as Address).toLowerCase()
-          const isBaseToken0 = baseTokenAddr === curr0Lower
-          // For buying (quote -> base) we need tokenOut = base
-          // For selling (base -> quote) we need tokenOut = quote
-          const zeroForOne = isBuying ? !isBaseToken0 : isBaseToken0
-          
-          console.log('Using DopplerLens:', dopplerLensAddress)
-          console.log('Dynamic auction quote params', { 
-            key,
-            zeroForOne, 
-            amountIn: amountIn.toString(), 
-            hookData: '0x' 
-          })
-          
-          const params = {
-            poolKey: key,
-            zeroForOne,
-            exactAmount: amountIn,
-            hookData: "0x" as `0x${string}`,
-          }
-          
+          const params = { poolKey: key, zeroForOne, exactAmount: amountIn, hookData: '0x' as `0x${string}` }
           try {
-            // DopplerLens uses the revert-with-data pattern
-            // We use simulateContract which handles reverts properly
-            const { result } = await publicClient.simulateContract({
-              address: dopplerLensAddress as Address,
-              abi: dopplerLensQuoterAbi,
-              functionName: "quoteDopplerLensData",
-              args: [params],
-            })
-            
-            // DopplerLens returns amounts for token0 and token1. The out token is
-            // token1 when zeroForOne is true (0 -> 1) else token0 (1 -> 0).
+            const { result } = await publicClient.simulateContract({ address: dopplerLensAddress as Address, abi: dopplerLensQuoterAbi, functionName: 'quoteDopplerLensData', args: [params] })
             const amountOut = zeroForOne ? result.amount1 : result.amount0
-              
-            console.log('DopplerLens result:', result, 'amountOut:', amountOut)
+            console.log('[QUOTE][V4][Lens] amountOut (indicative):', amountOut.toString())
+            setLastQuoteReliable(false)
             return amountOut
-          } catch (error: any) {
-            // The quoter might revert with the result in the error data
-            // This is expected behavior for V4 quoters
-            console.log('DopplerLens simulation error (expected):', error)
-            
-            // Try to parse the result from the error if it contains return data
-            if (error?.data) {
-              console.log('Attempting to parse revert data:', error.data)
-              // The error data might contain the encoded result
-              // For now, log it and return null - may need custom parsing
-              return null
-            }
-            
-            console.error('Failed to parse DopplerLens quote:', error)
+          } catch (error) {
+            console.error('DopplerLens quote simulation failed', error)
             return null
           }
         } else {
           // Standard V4 pool (not dynamic auction)
-          // Determine swap direction based on sorted addresses
-          const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
-          const curr0Lower = key.currency0.toLowerCase()
-          
-          // Determine if base token is currency0 or currency1
-          const isBaseToken0 = baseTokenAddr === curr0Lower
-          
-          // For buying (quote -> base), we're swapping FROM quote TO base
-          // For selling (base -> quote), we're swapping FROM base TO quote
-          const zeroForOne = isBuying 
-            ? !isBaseToken0  // If buying and base is token1, swap 0->1. If base is token0, swap 1->0
-            : isBaseToken0   // If selling and base is token0, swap 0->1. If base is token1, swap 1->0
-
-          // Use standard Uniswap v4 Quoter
           const v4QuoterAddress = resolveV4QuoterAddress()
           if (!v4QuoterAddress) {
-            console.warn("v4 Quoter address not found in addresses; falling back to SDK Quoter")
+            console.warn('v4 Quoter address not found in addresses; falling back to SDK Quoter')
             const quoter = new Quoter(publicClient, chainId)
             const quote = await quoter.quoteExactInputV4({
               poolKey: key,
               zeroForOne,
               exactAmount: amountIn,
-              hookData: "0x",
+              hookData: '0x',
             })
-            return quote.amountOut
-          }
-
+            setLastQuoteReliable(true)
+        return quote.amountOut
+      }
           console.log('Using Uniswap v4 Quoter:', v4QuoterAddress)
           console.log('quote params', { key, zeroForOne, amountIn: amountIn.toString(), hookData: '0x' })
-          const result: any = await publicClient.readContract({
+          const result = await publicClient.readContract({
             address: v4QuoterAddress,
             abi: uniswapV4QuoterAbi,
-            functionName: "quoteExactInputSingle",
-            args: [key, zeroForOne, amountIn, "0x"],
-          })
-          const amountOut: bigint = typeof result === 'bigint' ? result : (result?.amountOut as bigint)
+            functionName: 'quoteExactInputSingle',
+            args: [key, zeroForOne, amountIn, '0x'],
+          }) as any
+          const amountOut: bigint = typeof result === "bigint" ? result : (result?.amountOut as bigint)
+          setLastQuoteReliable(true)
           return amountOut
         }
       } catch (error) {
-        console.error("Error fetching V4 quote:", error)
+        console.error('Error fetching V4 quote:', error)
         return null
       }
     } else {
       // For V3 pools, use the unified SDK's Quoter
       try {
-        console.log("Fetching V3 quote for pool:", pool.address)
+        console.log('Fetching V3 quote for pool:', pool.address)
         const quoter = new Quoter(publicClient, chainId)
         
         const baseTokenAddress = getCurrencyAddress(pool.baseToken.address as Address)
@@ -892,10 +896,11 @@ export default function PoolDetails() {
           sqrtPriceLimitX96: 0n,
         })
         
-        console.log("V3 quote result:", quote)
+        console.log('V3 quote result:', quote)
+        setLastQuoteReliable(true)
         return quote.amountOut
       } catch (error) {
-        console.error("Error fetching V3 quote:", error)
+        console.error('Error fetching V3 quote:', error)
         return null
       }
     }
@@ -973,8 +978,14 @@ export default function PoolDetails() {
           ? !isBaseToken0  // If buying and base is token1, swap 0->1. If base is token0, swap 1->0
           : isBaseToken0   // If selling and base is token0, swap 0->1. If base is token1, swap 1->0
 
+        console.log('[SWAP][V4] isBaseToken0:', isBaseToken0)
+
+        // Enforce slippage based on the actual Quoter-derived amountOut (works for dynamic now)
+        const minOut = (lastQuoteReliable && quotedAmount) ? (quotedAmount * (10000n - DEFAULT_SLIPPAGE_BPS)) / 10000n : 0n
+        console.log('[SWAP][V4] amountIn:', amountIn.toString(), 'quotedAmount:', quotedAmount?.toString(), 'minOut:', minOut.toString())
+
         const actionBuilder = new V4ActionBuilder()
-        const [actions, params] = actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, 0n, "0x")
+        const [actions, params] = actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, minOut, "0x")
         .addAction(V4ActionType.SETTLE_ALL, [zeroForOne ? key.currency0 : key.currency1, maxUint256])
         .addAction(V4ActionType.TAKE_ALL, [zeroForOne ? key.currency1 : key.currency0, 0]).build()
 
@@ -1029,12 +1040,17 @@ export default function PoolDetails() {
 
         const [commands, inputs] = builder.addV4Swap(actions, params).build()
 
+        // Determine if the input currency is native (requires sending `value`)
+        const inputCurrency = zeroForOne ? key.currency0 : key.currency1
+        const isNativeInput = inputCurrency.toLowerCase() === zeroAddress.toLowerCase()
+        console.log('[SWAP][V4] key:', key, 'zeroForOne:', zeroForOne, 'isNativeInput:', isNativeInput, 'hookData: 0x')
+
         const txHash = await walletClient?.writeContract({
           address: universalRouter,
           abi: universalRouterAbi,
           functionName: "execute",
           args: [commands, inputs],
-          value: zeroForOne ? amountIn : 0n
+          value: isNativeInput ? amountIn : 0n
         })
         if (txHash) {
           const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
@@ -1131,15 +1147,19 @@ export default function PoolDetails() {
           commandBuilder.addWrapEth(universalRouter, amountIn)
         }
         
+        // Compute minOut based on last quote and default slippage
+        const minOut = quotedAmount ? (quotedAmount * (10000n - DEFAULT_SLIPPAGE_BPS)) / 10000n : 0n
+        console.log('[SWAP][V3] amountIn:', amountIn.toString(), 'quotedAmount:', quotedAmount?.toString(), 'minOut:', minOut.toString())
+
         // Add the V3 swap command
         commandBuilder.addV3SwapExactIn(
           account.address as Address,  // recipient
           amountIn,                     // amountIn
-          0n,                          // amountOutMinimum (0 for now, should calculate slippage)
+          minOut,                      // amountOutMinimum based on quote - slippage
           encodedPath,                  // path with fees
           false                        // don't unwrap ETH at the end
         )
-        
+
         const [commands, inputs] = commandBuilder.build()
         
         const txHash = await walletClient?.writeContract({
@@ -1197,7 +1217,8 @@ export default function PoolDetails() {
     
     if (value && pool) {
       try {
-        const amountIn = parseEther(value)
+        const amountIn = parseUnits(value, tokenInDecimals)
+        console.log('[INPUT] tokenInDecimals:', tokenInDecimals, 'parsed amountIn:', amountIn.toString())
         const quote = await fetchQuote(amountIn)
         setQuotedAmount(quote ?? null)
       } catch (error) {
@@ -1486,14 +1507,20 @@ export default function PoolDetails() {
 
   const handleSwap = () => {
     if (!amount || !quotedAmount) return
-    executeSwap(parseEther(amount))
+    try {
+      const ai = parseUnits(amount, tokenInDecimals)
+      console.log('[SWAP] Parsed amountIn with decimals', tokenInDecimals, '->', ai.toString())
+      executeSwap(ai)
+    } catch (e) {
+      console.error('[SWAP] Failed to parse amountIn with decimals', tokenInDecimals, e)
+    }
   }
 
   const handleApprove = async () => {
     if (!pool || !account.address || !walletClient || !publicClient) return
     const tokenIn = getTokenInAddress()
     if (!tokenIn || tokenIn === zeroAddress) return
-    const required = parseEther(amount || '0')
+    const required = (() => { try { return parseUnits(amount || '0', tokenInDecimals) } catch { return 0n } })()
     if (required === 0n) return
 
     setIsApproving(true)
@@ -1691,6 +1718,12 @@ export default function PoolDetails() {
 
       <div className="border border-primary/20 rounded-lg p-6 bg-card/50 backdrop-blur">
         <h2 className="text-2xl font-semibold mb-6">Swap</h2>
+        {auctionNotStarted && (
+          <div className="mb-4 p-3 border rounded-md bg-amber-50/80 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            Auction has not started yet.
+            {auctionStartTime && (<> Starts at {new Date(auctionStartTime * 1000).toLocaleString()}. </>)} Quotes may be indicative; swaps are disabled until start.
+          </div>
+        )}
         
         <Tabs defaultValue="buy" className="w-full" onValueChange={handleTabChange}>
           <TabsList className="grid w-full grid-cols-2">
@@ -1719,6 +1752,7 @@ export default function PoolDetails() {
                 value={amount}
                 onChange={handleAmountChange}
                 className="bg-background/50"
+                disabled={auctionNotStarted}
               />
               {quotedAmount !== null && (
                 <p className="text-sm text-muted-foreground">
@@ -1749,6 +1783,7 @@ export default function PoolDetails() {
                 value={amount}
                 onChange={handleAmountChange}
                 className="bg-background/50"
+                disabled={auctionNotStarted}
               />
               {quotedAmount !== null && (
                 <p className="text-sm text-muted-foreground">
@@ -1763,7 +1798,7 @@ export default function PoolDetails() {
           <Button 
             onClick={handleApprove}
             className="w-full mt-4"
-            disabled={!amount || isApproving}
+            disabled={!amount || isApproving || auctionNotStarted}
           >
             {isApproving ? 'Approving…' : 'Approve'}
           </Button>
@@ -1771,7 +1806,7 @@ export default function PoolDetails() {
           <Button 
             onClick={handleSwap}
             className="w-full mt-4"
-            disabled={!amount || !quotedAmount}
+            disabled={!amount || !quotedAmount || auctionNotStarted}
           >
             Swap
           </Button>

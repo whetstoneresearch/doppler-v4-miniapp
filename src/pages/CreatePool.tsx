@@ -490,6 +490,21 @@ export default function CreatePool() {
                     </Button>
                   </a>
                 )}
+                {/* Link to the pool details page */}
+                {(() => {
+                  const chainId = 84532; // Base Sepolia for this miniapp
+                  const v4Hook = deploymentResult.auctionType === 'dynamic' ? deploymentResult.hookAddress : undefined;
+                  const v3Pool = deploymentResult.auctionType === 'static' ? deploymentResult.poolAddress : undefined;
+                  const poolPageAddress = (v4Hook || v3Pool);
+                  if (!poolPageAddress) return null;
+                  return (
+                    <Link to={`/pool/${poolPageAddress}?chainId=${chainId}`}>
+                      <Button className="w-full">
+                        Open Pool Page →
+                      </Button>
+                    </Link>
+                  );
+                })()}
               </div>
             </div>
           </div>
