@@ -2,7 +2,7 @@ import { useParams, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { GraphQLClient } from "graphql-request"
 import { Pool } from "@/utils/graphql"
-import { Address, formatEther, Hex, maxUint256, parseAbi, parseEther, parseUnits, zeroAddress } from "viem"
+import { Address, formatEther, formatUnits, Hex, maxUint256, parseAbi, parseEther, parseUnits, zeroAddress } from "viem"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
@@ -193,6 +193,7 @@ export default function PoolDetails() {
   const [isApproving, setIsApproving] = useState(false)
   const [needsApproval, setNeedsApproval] = useState<boolean>(false)
   const [tokenInDecimals, setTokenInDecimals] = useState<number>(18)
+  const [baseDecimals, setBaseDecimals] = useState<number>(18)
   const [nftAddress, setNftAddress] = useState<Address | null>(null)
   const [nftData, setNftData] = useState<Array<{
     tokenId: number
@@ -219,6 +220,7 @@ export default function PoolDetails() {
   const [ownedIdsOrdered, setOwnedIdsOrdered] = useState<number[] | null>(null)
   const [supportsTokenOfOwnerByIndex, setSupportsTokenOfOwnerByIndex] = useState<boolean>(false)
   const [freezeMode, setFreezeMode] = useState<boolean>(false)
+  // Advanced stats removed
   const [selectedTokenIds, setSelectedTokenIds] = useState<Set<number>>(new Set())
   // Freeze Next N flow removed; selection-only via tokenOfOwnerByIndex
   const [isFreezing, setIsFreezing] = useState<boolean>(false)
@@ -351,6 +353,26 @@ export default function PoolDetails() {
     }
   })
 
+  // Removed advanced pool-type derived stats
+  // Removed hookAddress usage (advanced stats removed)
+  
+
+  // Removed quote token decimals effect (advanced stats removed)
+
+  useEffect(() => {
+    const run = async () => {
+      try {
+        if (!pool || !publicClient) return
+        const decAbi = parseAbi(['function decimals() view returns (uint8)'])
+        const d = await publicClient.readContract({ address: pool.baseToken.address as Address, abi: decAbi, functionName: 'decimals' }) as number
+        setBaseDecimals(d || 18)
+      } catch {
+        setBaseDecimals(18)
+      }
+    }
+    run()
+  }, [publicClient, pool?.baseToken.address])
+
   // Determine if auction has not started yet (for V4 dynamic auctions)
   const auctionStartTime = pool?.v4Config?.startingTime ? Number(pool.v4Config.startingTime) : undefined
   const nowSec = Math.floor(Date.now() / 1000)
@@ -457,14 +479,34 @@ export default function PoolDetails() {
     }
   }, [publicClient, pool?.baseToken.address, account?.address, nftMirrorAddress])
 
-  const { data: baseTokenBalance } = useBalance({
+  const { data: baseTokenBalance, refetch: refetchBaseTokenBalance } = useBalance({
     address: account.address,
     token: pool?.baseToken.address as Address,
   })
 
-  const { data: quoteTokenBalance } = useBalance({
+  const { data: quoteTokenBalance, refetch: refetchQuoteTokenBalance } = useBalance({
     address: account.address,
     token: pool?.quoteToken.address as Address,
+  })
+
+  // If Doppler404, read user's NFT balance from the ERC721 mirror
+  const { data: nftBalanceOf, refetch: refetchNftBalanceOf } = useQuery({
+    queryKey: ['nftBalanceOf', chainId, nftMirrorAddress, account.address],
+    enabled: !!publicClient && !!nftMirrorAddress && !!account?.address,
+    queryFn: async () => {
+      try {
+        const bal = await publicClient.readContract({
+          address: nftMirrorAddress as Address,
+          abi: erc721Abi,
+          functionName: 'balanceOf',
+          args: [account.address as Address],
+        })
+        return typeof bal === 'bigint' ? Number(bal) : Number(bal as any)
+      } catch {
+        return 0
+      }
+    },
+    staleTime: 30_000,
   })
 
   // Minimal ERC20 ABI for approvals and allowances
@@ -1092,6 +1134,10 @@ export default function PoolDetails() {
             } catch {}
             setNftReloadNonce((x) => x + 1)
           }
+          // Refresh balances after successful swap
+          try { await refetchBaseTokenBalance() } catch {}
+          try { await refetchQuoteTokenBalance() } catch {}
+          try { await refetchNftBalanceOf() } catch {}
         }
       } catch (error) {
         console.error("Error executing V4 swap:", error)
@@ -1208,6 +1254,10 @@ export default function PoolDetails() {
             } catch {}
             setNftReloadNonce((x) => x + 1)
           }
+          // Refresh balances after successful swap
+          try { await refetchBaseTokenBalance() } catch {}
+          try { await refetchQuoteTokenBalance() } catch {}
+          try { await refetchNftBalanceOf() } catch {}
         }
         console.log("V3 swap executed successfully")
       } catch (error) {
@@ -1518,6 +1568,10 @@ export default function PoolDetails() {
       setSelectedTokenIds(new Set())
       await refreshUserNfts()
       setNftReloadNonce((x) => x + 1)
+      // Also refresh balances shown in Swap section
+      try { await refetchBaseTokenBalance() } catch {}
+      try { await refetchQuoteTokenBalance() } catch {}
+      try { await refetchNftBalanceOf() } catch {}
     } catch (e) {
       console.error('Freeze selected failed', e)
       alert(e instanceof Error ? e.message : 'Freeze failed')
@@ -1754,6 +1808,41 @@ export default function PoolDetails() {
               </div>
             )}
           </div>
+
+          {account?.address && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-2">Your Balances</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">{pool.baseToken.symbol} (ERC20)</p>
+                  <p className="text-lg">
+                    {baseTokenBalance?.formatted
+                      ? `${Number(baseTokenBalance.formatted).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${pool.baseToken.symbol}`
+                      : `0 ${pool.baseToken.symbol}`}
+                  </p>
+                </div>
+                {nftMirrorAddress && (
+                  <div>
+                    <p className="text-sm text-muted-foreground">Mirror NFTs</p>
+                    <p className="text-lg">{typeof nftBalanceOf === 'number' ? nftBalanceOf : '—'}</p>
+                  </div>
+                )}
+                {nftMirrorAddress && (
+                  <div className="col-span-2">
+                    <p className="text-sm text-muted-foreground">Frozen (DN404)</p>
+                    <p className="text-lg">
+                      {frozenBalanceRaw !== null
+                        ? `${Number(formatUnits(frozenBalanceRaw, baseDecimals)).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${pool.baseToken.symbol}`
+                        : '—'}
+                      {typeof frozenNftCount === 'number' ? ` (${frozenNftCount} NFTs)` : ''}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          
         </div>
       </div>
 
@@ -1771,6 +1860,30 @@ export default function PoolDetails() {
             <TabsTrigger value="buy">Buy {pool.baseToken.symbol}</TabsTrigger>
             <TabsTrigger value="sell">Sell {pool.baseToken.symbol}</TabsTrigger>
           </TabsList>
+          {account?.address && (
+            <div className="mt-2 text-xs text-muted-foreground flex items-center gap-4 justify-end">
+              <span>
+                Balance: <span className="text-foreground font-medium">
+                  {baseTokenBalance?.formatted
+                    ? `${Number(baseTokenBalance.formatted).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${pool.baseToken.symbol}`
+                    : `0 ${pool.baseToken.symbol}`}
+                </span>
+              </span>
+              {nftMirrorAddress && (
+                <>
+                  <span>
+                    NFTs: <span className="text-foreground font-medium">{typeof nftBalanceOf === 'number' ? nftBalanceOf : '—'}</span>
+                  </span>
+                  <span>
+                    Frozen: <span className="text-foreground font-medium">
+                      {typeof frozenNftCount === 'number' ? `${frozenNftCount} NFTs` : '—'}
+                      {frozenBalanceRaw !== null ? ` (${Number(formatUnits(frozenBalanceRaw, baseDecimals)).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${pool.baseToken.symbol})` : ''}
+                    </span>
+                  </span>
+                </>
+              )}
+            </div>
+          )}
           
           <TabsContent value="buy" className="space-y-4">
             <div className="space-y-2">

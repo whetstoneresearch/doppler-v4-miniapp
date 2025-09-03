@@ -204,8 +204,8 @@ export default function CreatePool() {
           endTick: isDoppler404 ? 230000 : 190000,   // Doppler404: 0.01 ETH, Regular: default
           minProceeds: parseEther("100"), // 100 ETH
           maxProceeds: parseEther("600"), // 600 ETH
-          durationDays: 7, // 7 days
-          epochLength: 3600, // 1 hour epochs
+          durationDays: isDoppler404 ? 1 : 7, // DN404: 1 day, Regular: 7 days
+          epochLength: isDoppler404 ? 600 : 3600, // DN404: ~11m 40s, Regular: 1 hour
         })
         .withMigration({
           type: 'uniswapV4' as const,
