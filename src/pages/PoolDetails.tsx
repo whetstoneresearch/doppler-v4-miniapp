@@ -14,6 +14,7 @@ import {
 import { getAddresses } from "@whetstone-research/doppler-sdk"
 import { CommandBuilder, V4ActionBuilder, V4ActionType } from "doppler-router"
 import { dopplerLensQuoterAbi } from "@/lib/abis/dopplerLens"
+import { airlockAbi } from "@whetstone-research/doppler-sdk"
 
 
 // Minimal ABI for UniversalRouter execute function
@@ -326,6 +327,28 @@ export default function PoolDetails() {
       }
       return normalized
     },
+  })
+
+  // Determine if the pool can be migrated by simulating Airlock.migrate(asset)
+  const { data: canMigrate, isLoading: isCheckingMigrate } = useQuery({
+    queryKey: ['canMigrate', chainId, address, pool?.baseToken.address],
+    enabled: !!pool?.baseToken?.address && !!publicClient,
+    queryFn: async () => {
+      try {
+        const from = (account?.address as Address) || zeroAddress
+        await publicClient.simulateContract({
+          account: from,
+          address: addresses.airlock as Address,
+          abi: airlockAbi as any,
+          functionName: 'migrate',
+          args: [pool!.baseToken.address as Address],
+        })
+        return true
+      } catch (e) {
+        // Any revert means not migratable right now
+        return false
+      }
+    }
   })
 
   // Determine if auction has not started yet (for V4 dynamic auctions)
@@ -1652,6 +1675,14 @@ export default function PoolDetails() {
                   🎨 Doppler404
                 </div>
               )}
+              {/* Migration status badge */}
+              <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500">
+                {pool.asset?.migrated
+                  ? '✅ Migrated'
+                  : isCheckingMigrate
+                    ? '⏳ Checking migration…'
+                    : (canMigrate ? '🟢 Migratable' : '🟡 Not Migratable Yet')}
+              </div>
             </div>
           </div>
           <div className="text-right">
@@ -1692,6 +1723,16 @@ export default function PoolDetails() {
             <div>
               <p className="text-sm text-muted-foreground">Auction Type</p>
               <p className="text-lg">{pool.type === 'v4' ? 'Dynamic (V4)' : 'Static (V3)'}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Migration</p>
+              <p className="text-lg">
+                {pool.asset?.migrated
+                  ? 'Already migrated'
+                  : isCheckingMigrate
+                    ? 'Checking…'
+                    : (canMigrate ? 'Eligible to migrate' : 'Not eligible yet')}
+              </p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Created</p>
