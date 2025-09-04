@@ -1,6 +1,6 @@
 # Doppler V4 Miniapp
 
-This is a demo app for the Doppler protocol. It showcases deploying and interacting with Doppler auctions (static/V3 and dynamic/V4), quoting trades, among other unique features. Notably, it uses the latest [doppler-sdk-alpha](https://github.com/whetstoneresearch/doppler-sdk-alpha) which provides a unified interface and singular package to install to manage Doppler integrations, regardless of which type of auction integrators wish to use.
+This is a demo app for the Doppler protocol. It showcases deploying and interacting with Doppler auctions (static/V3 and dynamic/V4), quoting trades, among other unique features, including Doppler404 (aka DN404, or hybrid NFT+ERC20 tokens) launches. Notably, it uses the latest [doppler-sdk-alpha](https://github.com/whetstoneresearch/doppler-sdk-alpha) which provides a unified interface and singular package to install to manage Doppler integrations, regardless of which type of auction integrators wish to use.
 
 - Doppler protocol on GitHub: https://github.com/whetstoneresearch/doppler
 
@@ -85,6 +85,18 @@ const dynamicParams = new DynamicAuctionBuilder()
 const result = await factory.createDynamicAuction(dynamicParams);
 ```
 [Source: `src/pages/CreatePool.tsx#L187-L238`](src/pages/CreatePool.tsx#L187-L238)
+
+### Doppler404 (DN404) Token Config
+
+```ts
+dynamicBuilder.tokenConfig({
+  type: 'doppler404' as const,
+  name: formData.tokenName,
+  symbol: formData.tokenSymbol,
+  baseURI: formData.baseURI || `https://metadata.example.com/${formData.tokenSymbol.toLowerCase()}/`,
+})
+```
+[Source: `src/pages/CreatePool.tsx#L172-L178`](src/pages/CreatePool.tsx#L172-L178)
 
 ### Quoting
 
