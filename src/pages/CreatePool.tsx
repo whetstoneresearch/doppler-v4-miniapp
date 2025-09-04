@@ -132,7 +132,7 @@ export default function CreatePool() {
 
         // For Doppler404 static auctions, use noop governance
         if (isDoppler404) {
-          builderChain = builderChain.withGovernance({ type: 'noop' as const })
+          builderChain = builderChain.withGovernance({ type: 'noOp' as const })
         }
 
         const staticParams = builderChain.build();
