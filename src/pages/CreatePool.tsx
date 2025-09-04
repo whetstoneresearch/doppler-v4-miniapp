@@ -113,7 +113,7 @@ export default function CreatePool() {
           })
         }
         
-        const staticParams = staticBuilder
+        let builderChain = staticBuilder
           .saleConfig({
             initialSupply: totalSupply,
             numTokensToSell: numTokensToSell,
@@ -129,7 +129,13 @@ export default function CreatePool() {
           })
           .withUserAddress(account.address)
           .withIntegrator(account.address)
-          .build();
+
+        // For Doppler404 static auctions, use noop governance
+        if (isDoppler404) {
+          builderChain = builderChain.withGovernance({ type: 'noop' as const })
+        }
+
+        const staticParams = builderChain.build();
         
         
         // Create static auction
