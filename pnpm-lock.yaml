@@ -27,8 +27,8 @@ importers:
         specifier: ^5.74.4
         version: 5.83.0(react@19.1.0)
       '@whetstone-research/doppler-sdk':
-        specifier: 0.0.1-alpha.16
-        version: 0.0.1-alpha.16(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)
+        specifier: 0.0.1-alpha.21
+        version: 0.0.1-alpha.21(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -1284,8 +1284,8 @@ packages:
   '@walletconnect/window-metadata@1.0.1':
     resolution: {integrity: sha512-9koTqyGrM2cqFRW517BPY/iEtUDx2r1+Pwwu5m7sJ7ka79wi3EyqhqcICk/yDmv6jAS1rjKgTKXlEhanYjijcA==}
 
-  '@whetstone-research/doppler-sdk@0.0.1-alpha.16':
-    resolution: {integrity: sha512-USYDHAbrwYCDrzlrneUjU7H9noi39AqkT0VQh4mBttSsrqMroUwkMc+Yi/6ZNVEah1ZjdEaTBThQWUKktD+ydQ==}
+  '@whetstone-research/doppler-sdk@0.0.1-alpha.21':
+    resolution: {integrity: sha512-GTuSZb0PmRPjZO1DxMpLuDrRpfk3kgyd6dXWmhcOguf4sqt+oxlW8+cLIigydOdGimIXBPAEYj54aomGwJA7dQ==}
     engines: {node: '>=18.0.0'}
 
   abitype@1.0.8:
@@ -4772,7 +4772,7 @@ snapshots:
       '@walletconnect/window-getters': 1.0.1
       tslib: 1.14.1
 
-  '@whetstone-research/doppler-sdk@0.0.1-alpha.16(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)':
+  '@whetstone-research/doppler-sdk@0.0.1-alpha.21(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)':
     dependencies:
       viem: 2.36.0(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10)(zod@3.22.4)
     transitivePeerDependencies:

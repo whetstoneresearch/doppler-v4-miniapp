@@ -4,8 +4,10 @@ import { useState } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
 import { getAddresses } from "@whetstone-research/doppler-sdk"
 import { DopplerSDK, StaticAuctionBuilder, DynamicAuctionBuilder } from "@whetstone-research/doppler-sdk"
-import { parseEther, type Address } from "viem"
+import { parseEther, formatEther, decodeEventLog, type Address } from "viem"
+import { CommandBuilder, SwapRouter02Encoder } from "doppler-router"
 import { getBlock } from "viem/actions"
+import { airlockAbi } from "@whetstone-research/doppler-sdk"
 
 // DN404 ABI for mirrorERC721 function
 const dn404Abi = [
@@ -25,6 +27,8 @@ export default function CreatePool() {
   const [isDeploying, setIsDeploying] = useState(false)
   const [auctionType, setAuctionType] = useState<'static' | 'dynamic'>('dynamic')
   const [isDoppler404, setIsDoppler404] = useState(false)
+  const [enableBundlePrebuy, setEnableBundlePrebuy] = useState(false)
+  const [prebuyPercent, setPrebuyPercent] = useState<string>('1')
   const [deploymentResult, setDeploymentResult] = useState<{
     tokenAddress: string
     nftAddress?: string
@@ -130,19 +134,147 @@ export default function CreatePool() {
           .withUserAddress(account.address)
           .withIntegrator(account.address)
           // Use default governance params for static auctions
-          .withGovernance({ useDefaults: true as const })
+          .withGovernance({ type: 'default' as const })
 
         const staticParams = builderChain.build();
-        
-        
-        // Create static auction
+
+        // If user enabled pre-buy via bundling, simulate and bundle create + swap
+        if (enableBundlePrebuy) {
+          // 1) Simulate create to get CreateParams and predicted asset/pool
+          const { createParams, asset, pool } = await factory.simulateCreateStaticAuction(staticParams)
+
+          // 2) Compute target amountOut as percent of tokens for sale (integer percent)
+          const pctNum = Number(prebuyPercent || '0')
+          const pct = Number.isFinite(pctNum) ? Math.max(0, Math.min(100, Math.floor(pctNum))) : 0
+          const amountOut = (staticParams.sale.numTokensToSell * BigInt(pct)) / 100n
+
+          if (amountOut <= 0n) {
+            throw new Error('Pre-buy percent must be greater than 0')
+          }
+
+          // 3) Quote required ETH input using Bundler simulator
+          console.log('[BUNDLE PREBUY] createParams:', createParams)
+          console.log('[BUNDLE PREBUY] predicted asset (token):', asset)
+          console.log('[BUNDLE PREBUY] predicted pool:', pool)
+          console.log('[BUNDLE PREBUY] numTokensToSell:', staticParams.sale.numTokensToSell.toString())
+          console.log('[BUNDLE PREBUY] prebuy percent:', pct, '%')
+          console.log('[BUNDLE PREBUY] target amountOut (tokens):', amountOut.toString())
+
+          const amountIn = await factory.simulateBundleExactOutput(createParams, {
+            tokenIn: weth,
+            tokenOut: asset,
+            amount: amountOut,
+            fee: staticParams.pool.fee,
+            sqrtPriceLimitX96: 0n,
+          })
+
+          console.log('[BUNDLE PREBUY] simulated required amountIn (wei):', amountIn.toString())
+          console.log('[BUNDLE PREBUY] simulated required amountIn (ETH):', formatEther(amountIn))
+
+          // Sanity cross-check: run exact-in sim with the returned amountIn and confirm we meet/exceed amountOut
+          try {
+            const crossOut = await factory.simulateBundleExactInput(createParams, {
+              tokenIn: weth,
+              tokenOut: asset,
+              amountIn,
+              fee: staticParams.pool.fee,
+              sqrtPriceLimitX96: 0n,
+            })
+            console.log('[BUNDLE PREBUY][cross-check] amountOut for amountIn:', crossOut.toString())
+          } catch (e) {
+            console.warn('[BUNDLE PREBUY][cross-check] exact-in simulation failed:', e)
+          }
+
+          // 4) Build Universal Router commands for exact-out V3 swap (wrap ETH then swap)
+          const universalRouter = addresses.universalRouter as Address
+          const encoder = new SwapRouter02Encoder()
+          const encodedPath = encoder.encodePathExactOutput([weth as Address, asset as Address])
+          const builder = new CommandBuilder()
+          builder.addWrapEth(universalRouter, amountIn)
+          builder.addV3SwapExactOut(account.address as Address, amountOut, amountIn, encodedPath, false)
+          // NOTE: We do not currently sweep/unwrap potential leftover WETH from the Universal Router.
+          // If simulateBundleExactOutput returns a conservative amount and the actual swap consumes less,
+          // the remainder may be left in the router unless additional sweep/unwrap steps are appended.
+          const [commands, inputs] = builder.build()
+
+          // 5) Atomically create + pre-buy via Bundler
+          const txHash = await factory.bundle(createParams, commands, inputs, { value: amountIn })
+
+          console.log(`${isDoppler404 ? 'Doppler 404' : ''} static auction (bundled pre-buy) submitted!`)
+          console.log('Transaction hash:', txHash)
+          console.log('Predicted token address:', asset)
+          console.log('Predicted pool address:', pool)
+
+          // If Doppler404, get the NFT mirror address from predicted token (will be valid post-mining)
+          let nftAddress: Address | undefined
+          if (isDoppler404) {
+            try {
+              nftAddress = await publicClient.readContract({
+                address: asset as Address,
+                abi: dn404Abi,
+                functionName: 'mirrorERC721',
+              })
+            } catch (error) {
+              console.error('Failed to get NFT mirror address (pre-confirmation):', error)
+            }
+          }
+
+          setDeploymentResult({
+            tokenAddress: asset as string,
+            nftAddress,
+            poolAddress: pool as string,
+            transactionHash: txHash as string,
+            auctionType: 'static',
+          })
+
+          return;
+        }
+
+        // Otherwise, plain create without pre-buy
         const result = await factory.createStaticAuction(staticParams);
         
+        // The SDK returns tokenAddress (asset) and poolAddress (pool) in that order.
+        // We still decode the Create event to confirm and use it as the source of truth.
+        let correctedTokenAddress = result.tokenAddress as Address | undefined
+        let correctedPoolAddress = result.poolAddress as Address | undefined
+        try {
+          const receipt = await publicClient.getTransactionReceipt({ hash: result.transactionHash as `0x${string}` })
+          const createLog = receipt.logs.find((log) => {
+            try {
+              const decoded = decodeEventLog({ abi: airlockAbi as any, data: log.data, topics: log.topics }) as any
+              return decoded.eventName === 'Create'
+            } catch {
+              return false
+            }
+          })
+          if (createLog) {
+            const decoded = decodeEventLog({ abi: airlockAbi as any, data: createLog.data, topics: createLog.topics }) as any
+            if (decoded?.eventName === 'Create') {
+              const asset = decoded.args.asset as Address
+              const poolOrHook = decoded.args.poolOrHook as Address
+              // For static auctions, poolOrHook is the V3 pool address
+              correctedTokenAddress = asset
+              correctedPoolAddress = poolOrHook
+              // If the event differs from the SDK result, prefer the event-decoded values.
+              if (result.tokenAddress?.toLowerCase() !== asset.toLowerCase() || result.poolAddress?.toLowerCase() !== poolOrHook.toLowerCase()) {
+                console.warn('[STATIC CREATE] Event-decoded token/pool differs from SDK result. Using event-decoded addresses.', {
+                  sdkToken: result.tokenAddress,
+                  sdkPool: result.poolAddress,
+                  eventToken: asset,
+                  eventPool: poolOrHook,
+                })
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[STATIC CREATE] Failed to decode Create event for address correction:', e)
+        }
+
         console.log(`${isDoppler404 ? 'Doppler 404' : ''} static auction deployment completed!`);
         console.log("Transaction hash:", result.transactionHash);
-        console.log("Token address:", result.tokenAddress);
-        console.log("Pool address:", result.poolAddress);
-        
+        console.log("Token address (corrected):", correctedTokenAddress);
+        console.log("Pool address (corrected):", correctedPoolAddress);
+
         // If Doppler404, get the NFT mirror address
         let nftAddress: Address | undefined;
         if (isDoppler404) {
@@ -156,11 +288,11 @@ export default function CreatePool() {
             console.error("Failed to get NFT mirror address:", error);
           }
         }
-        
+
         setDeploymentResult({
-          tokenAddress: result.tokenAddress,
+          tokenAddress: correctedTokenAddress as string,
           nftAddress,
-          poolAddress: result.poolAddress,
+          poolAddress: correctedPoolAddress as string,
           transactionHash: result.transactionHash,
           auctionType: 'static',
         });
@@ -335,6 +467,44 @@ export default function CreatePool() {
               </p>
             </div>
             
+            {auctionType === 'static' && (
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="bundlePrebuy"
+                    checked={enableBundlePrebuy}
+                    onChange={(e) => setEnableBundlePrebuy(e.target.checked)}
+                    className="w-4 h-4 rounded border-input text-primary focus:ring-primary"
+                  />
+                  <label htmlFor="bundlePrebuy" className="text-sm font-medium cursor-pointer">
+                    Pre-buy via bundling (static auctions)
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Atomically create the pool and buy a portion of tokens using ETH.
+                </p>
+                {enableBundlePrebuy && (
+                  <div className="space-y-2 pl-6">
+                    <label className="text-sm font-medium">Pre-buy percent of tokens for sale</label>
+                    <input
+                      type="number"
+                      value={prebuyPercent}
+                      onChange={(e) => setPrebuyPercent(e.target.value)}
+                      className="w-full px-4 py-2 rounded-md bg-background/50 border border-input focus:border-primary focus:ring-1 focus:ring-primary"
+                      placeholder="e.g., 1"
+                      min="1"
+                      max="100"
+                      step="1"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      We will simulate the required ETH and execute an exact-output V3 swap during creation.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="space-y-2">
               <label className="text-sm font-medium">Token Name</label>
               <input 
