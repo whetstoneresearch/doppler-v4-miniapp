@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button"
 import { Link } from "react-router-dom"
 import { useState } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
-import { getAddresses } from "@whetstone-research/doppler-sdk"
+import { getAddresses, calculateTickRange } from "@whetstone-research/doppler-sdk"
 import { DopplerSDK, StaticAuctionBuilder, DynamicAuctionBuilder } from "@whetstone-research/doppler-sdk"
 import { parseEther, formatEther, decodeEventLog, type Address } from "viem"
 import { CommandBuilder, SwapRouter02Encoder } from "doppler-router"
@@ -117,6 +117,14 @@ export default function CreatePool() {
           })
         }
         
+        // Choose a reasonable price corridor in ETH per token and derive ticks.
+        // Use a conservative default corridor per variant.
+        const staticFee = 10000 // 1% tier for static pools
+        const tickSpacing = staticFee === 10000 ? 200 : staticFee === 3000 ? 60 : 10
+        const { startTick, endTick } = isDoppler404
+          ? calculateTickRange(0.01, 0.1, tickSpacing)   // ~0.01–0.1 ETH per token
+          : calculateTickRange(0.0001, 0.001, tickSpacing) // ~0.0001–0.001 ETH per token
+
         let builderChain = staticBuilder
           .saleConfig({
             initialSupply: totalSupply,
@@ -124,9 +132,9 @@ export default function CreatePool() {
             numeraire: weth,
           })
           .poolByTicks({
-            startTick: isDoppler404 ? 183000 : 175000, // Doppler404: 0.1 ETH, Regular: default
-            endTick: isDoppler404 ? 230000 : 225000,   // Doppler404: 0.01 ETH, Regular: default
-            fee: 10000, // 1% fee tier
+            startTick,
+            endTick,
+            fee: staticFee, // 1% fee tier
           })
           .withMigration({
             type: 'uniswapV2' as const
