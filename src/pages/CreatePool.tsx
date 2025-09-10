@@ -42,6 +42,7 @@ export default function CreatePool() {
   const [formData, setFormData] = useState({
     tokenName: '',
     tokenSymbol: '',
+    tokenURI: '',
     baseURI: '',
     totalSupply: '10000000',
   })
@@ -113,7 +114,7 @@ export default function CreatePool() {
           staticBuilder.tokenConfig({
             name: formData.tokenName,
             symbol: formData.tokenSymbol,
-            tokenURI: "",
+            tokenURI: formData.tokenURI,
           })
         }
         
@@ -321,7 +322,7 @@ export default function CreatePool() {
         dynamicBuilder.tokenConfig({
           name: formData.tokenName,
           symbol: formData.tokenSymbol,
-          tokenURI: "",
+          tokenURI: formData.tokenURI,
         })
       }
       
@@ -530,6 +531,22 @@ export default function CreatePool() {
               />
               <p className="text-xs text-muted-foreground">Maximum 6 characters, automatically converted to uppercase</p>
             </div>
+
+            {!isDoppler404 && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Metadata URL (tokenURI)</label>
+                <input
+                  type="text"
+                  value={formData.tokenURI}
+                  onChange={(e) => setFormData(prev => ({ ...prev, tokenURI: e.target.value }))}
+                  className="w-full px-4 py-2 rounded-md bg-background/50 border border-input focus:border-primary focus:ring-1 focus:ring-primary"
+                  placeholder="e.g., ipfs://CID or https://example.com/token.json"
+                />
+                <p className="text-xs text-muted-foreground">
+                  We pass this URL directly to the token factory. No uploads or validation performed.
+                </p>
+              </div>
+            )}
             
             {isDoppler404 && (
               <>
