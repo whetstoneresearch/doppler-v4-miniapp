@@ -6,6 +6,7 @@ import {
   Hash,
   Hex,
   keccak256,
+  zeroAddress,
 } from "viem";
 import {
   DERC20Bytecode,
@@ -77,8 +78,7 @@ function computeCreate2Address(
 }
 
 export function mine(params: MineV4Params): [Hash, Address, Address, Hex, Hex] {
-  const isToken0 =
-    params.numeraire !== "0x0000000000000000000000000000000000000000";
+  const isToken0 = params.numeraire !== zeroAddress;
 
   const {
     initialPrice,

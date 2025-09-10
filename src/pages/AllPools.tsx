@@ -107,11 +107,6 @@ export default function AllPools() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-4xl font-bold text-primary">Active Pools</h1>
-        <div className="flex items-center gap-2">
-          <Link to="/debug/quote">
-            <Button variant="outline">Quote Debugger</Button>
-          </Link>
-        </div>
       </div>
       
       <Tabs value={poolFilter} onValueChange={(value) => setPoolFilter(value as PoolFilter)} className="mb-6">

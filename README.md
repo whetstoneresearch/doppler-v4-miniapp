@@ -21,6 +21,7 @@ pnpm dev
 - **DopplerLens**: ABI-driven quoting path for dynamic auctions.
 - **Unified addresses**: one call to resolve addresses across chains.
 - **Bytecode exports**: `DopplerBytecode`/`DERC20Bytecode` for deterministic address computation.
+ - **Bundled pre-buy (static/V3)**: simulate and atomically create + pre-buy via Bundler using Universal Router commands.
 
 ## Code Samples
 
@@ -52,7 +53,21 @@ const staticParams = new StaticAuctionBuilder()
   .withIntegrator(account.address)
   .build();
 
+// Option A: plain create
 const result = await factory.createStaticAuction(staticParams);
+
+// Option B: create + pre-buy (bundle)
+const { createParams, asset } = await sdk.factory.simulateCreateStaticAuction(staticParams)
+const amountOut = staticParams.sale.numTokensToSell / 100n // 1%
+const amountIn = await sdk.factory.simulateBundleExactOutput(createParams, { tokenIn: weth, tokenOut: asset, amount: amountOut, fee: staticParams.pool.fee, sqrtPriceLimitX96: 0n })
+const { universalRouter } = getAddresses(84532)
+const encoder = new SwapRouter02Encoder()
+const encodedPath = encoder.encodePathExactOutput([weth, asset])
+const builder = new CommandBuilder()
+builder.addWrapEth(universalRouter, amountIn)
+builder.addV3SwapExactOut(user, amountOut, amountIn, encodedPath, false)
+const [commands, inputs] = builder.build()
+const txHash = await sdk.factory.bundle(createParams, commands, inputs, { value: amountIn })
 ```
 [Source: `src/pages/CreatePool.tsx#L111-L131`](src/pages/CreatePool.tsx#L111-L131)
 
