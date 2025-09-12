@@ -9,6 +9,9 @@ export interface Token {
   address: string;
   name: string;
   symbol: string;
+  image?: string;
+  // Raw token metadata JSON fetched by the indexer from tokenURI
+  tokenUriData?: any;
 }
 
 export interface Asset {
@@ -108,8 +111,8 @@ export const GET_POOLS_QUERY = `
         sqrtPrice
         liquidity
         createdAt
-        baseToken { address name symbol }
-        quoteToken { address name symbol }
+        baseToken { address name symbol image tokenUriData }
+        quoteToken { address name symbol image tokenUriData }
         price
         fee
         type

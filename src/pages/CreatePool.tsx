@@ -302,9 +302,9 @@ export default function CreatePool() {
       }
       
       // Dynamic auction configuration using the new builder pattern
-      // Get block timestamp first
+      // Get latest block timestamp and set an explicit start offset for safety
       const block = await getBlock(publicClient);
-      const adjustedTimestamp = block.timestamp + 60n; // Add 1 minute
+      const startTimeOffsetSec = 5 * 60; // 5 minutes buffer to avoid InvalidStartTime
       
       // Build dynamic auction using the new builder pattern
       const dynamicBuilder = new DynamicAuctionBuilder(84532)
@@ -326,22 +326,25 @@ export default function CreatePool() {
         })
       }
       
+      // Set pool tick spacing for the V4 dynamic auction; gamma and epoch/duration use SDK defaults
+      const tickSpacing = 2
+
       const dynamicParams = dynamicBuilder
         .saleConfig({
           initialSupply: totalSupply,
           numTokensToSell: numTokensToSell,
         })
         .poolConfig({
-          fee: 3000, // 0.3% fee tier
-          tickSpacing: 8, // Match V4 tick spacing
+          fee: 20000, // 2% fee tier (align with pure-markets-interface)
+          tickSpacing, // Align with V4 dynamic default tick spacing
         })
         .auctionByTicks({
-          startTick: isDoppler404 ? 183000 : 180000, // Doppler404: 0.1 ETH, Regular: default
-          endTick: isDoppler404 ? 230000 : 190000,   // Doppler404: 0.01 ETH, Regular: default
+          // Align non-DN404 defaults with pure-markets-interface V4 defaults
+          startTick: isDoppler404 ? 183000 : 174312,
+          endTick: isDoppler404 ? 230000 : 186840,
           minProceeds: parseEther("100"), // 100 ETH
           maxProceeds: parseEther("600"), // 600 ETH
-          durationDays: isDoppler404 ? 1 : 7, // DN404: 1 day, Regular: 7 days
-          epochLength: isDoppler404 ? 600 : 3600, // DN404: ~11m 40s, Regular: 1 hour
+          // gamma omitted: computed from tick range, duration, epoch, and tickSpacing by the builder
         })
         .withMigration({
           type: 'uniswapV4' as const,
@@ -365,7 +368,8 @@ export default function CreatePool() {
         .withUserAddress(account.address)
         .withIntegrator() // Uses zero address by default
         .withTime({
-          blockTimestamp: Number(adjustedTimestamp),
+          blockTimestamp: Number(block.timestamp),
+          startTimeOffset: startTimeOffsetSec,
         })
         .build();
       

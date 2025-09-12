@@ -76,13 +76,14 @@ const txHash = await sdk.factory.bundle(createParams, commands, inputs, { value:
 ```ts
 const dynamicParams = new DynamicAuctionBuilder()
   .saleConfig({ initialSupply, numTokensToSell })
-  .poolConfig({ fee: 3000, tickSpacing: 8 })
+  .poolConfig({ fee: 20000, tickSpacing: 2 })
   .auctionByTicks({
-    startTick, endTick,
+    // Align with pure-markets-interface V4 defaults
+    startTick: 174_312,
+    endTick: 186_840,
     minProceeds: parseEther("100"),
     maxProceeds: parseEther("600"),
-    durationDays: 7,
-    epochLength: 3600,
+    // Omit duration/epoch/gamma to use SDK defaults
   })
   .withMigration({
     type: 'uniswapV4', fee: 3000, tickSpacing: 60,

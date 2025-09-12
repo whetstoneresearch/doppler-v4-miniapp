@@ -132,7 +132,7 @@ const GET_POOL_QUERY = `
         sqrtPrice
         liquidity
         createdAt
-        baseToken { address name symbol }
+        baseToken { address name symbol image tokenUriData }
         quoteToken { address name symbol }
         price
         fee
@@ -224,6 +224,8 @@ export default function PoolDetails() {
   const [selectedTokenIds, setSelectedTokenIds] = useState<Set<number>>(new Set())
   // Freeze Next N flow removed; selection-only via tokenOfOwnerByIndex
   const [isFreezing, setIsFreezing] = useState<boolean>(false)
+  // Metadata URI fetch status for base token (from indexer)
+  const [metadataUriError, setMetadataUriError] = useState<string | null>(null)
   const addresses = getAddresses(chainId)
   const { universalRouter } = addresses
 
@@ -280,8 +282,49 @@ export default function PoolDetails() {
         currency1 = sorted[1]
       }
       
+      // Resolve metadata (image and website URL) from indexer token fields
+      const resolveMetadataUri = (token: any): { raw?: string; http?: string; json?: string; websiteUrl?: string } => {
+        // Prefer explicit image fields from indexer, then tokenUriData
+        const imageUri: string | undefined = token?.image || token?.tokenUriData?.image || token?.tokenUriData?.image_hash
+        const tokenJson = token?.tokenUriData ? JSON.stringify(token.tokenUriData, null, 2) : undefined
+        // Try to surface a project URL if present in metadata
+        const websiteCandidate: string | undefined = (
+          token?.tokenUriData?.url ||
+          token?.tokenUriData?.external_url ||
+          token?.tokenUriData?.website ||
+          token?.url
+        )
+        const normalize = (u?: string) => (u && typeof u === 'string' && u.startsWith('ipfs://')) ? u.replace('ipfs://', 'https://ipfs.io/ipfs/') : u
+        const http = normalize(imageUri)
+        const websiteUrl = normalize(websiteCandidate)
+        if (!imageUri || typeof imageUri !== 'string') {
+          // No image; still return JSON and website if available
+          const base: { json?: string; websiteUrl?: string } = {}
+          if (tokenJson) base.json = tokenJson
+          if (websiteUrl) base.websiteUrl = websiteUrl
+          return base
+        }
+        return { raw: imageUri, http, json: tokenJson, websiteUrl }
+      }
+      const meta = resolveMetadataUri(p.baseToken)
+      console.log('Base token details:', {
+        address: p.baseToken?.address,
+        name: p.baseToken?.name,
+        symbol: p.baseToken?.symbol,
+        image: p.baseToken?.image,
+        tokenUriData: p.baseToken?.tokenUriData,
+        resolved: meta,
+      })
+      console.log('Quote token details:', {
+        address: p.quoteToken?.address,
+        name: p.quoteToken?.name,
+        symbol: p.quoteToken?.symbol,
+        image: p.quoteToken?.image,
+        tokenUriData: p.quoteToken?.tokenUriData,
+      })
+
       // Normalize into Pool shape used by UI
-      const normalized: Pool & { v4Config?: any } = {
+      const normalized: (Pool & { v4Config?: any }) & { metadataUriRaw?: string; metadataUriHttp?: string; metadataJson?: string; websiteUrl?: string } = {
         address: p.address,
         chainId: BigInt(p.chainId),
         tick: p.tick,
@@ -326,10 +369,40 @@ export default function PoolDetails() {
         hooks: p.hooks || p.address,
         // Add V4 config if available
         v4Config: v4Config || undefined,
+        metadataUriRaw: meta.raw,
+        metadataUriHttp: meta.http,
+        metadataJson: meta.json,
+        websiteUrl: meta.websiteUrl,
       }
       return normalized
     },
   })
+
+  // Validate the metadata URI returned by the indexer (if any) and surface a UI error
+  useEffect(() => {
+    const run = async () => {
+      try {
+        setMetadataUriError(null)
+        const uri = (pool as any)?.metadataUriHttp as string | undefined
+        if (!uri) return
+        const res = await fetch(uri, { method: 'GET' })
+        if (!res.ok) {
+          setMetadataUriError(`Failed to fetch metadata URI (HTTP ${res.status})`)
+          return
+        }
+        const ct = res.headers.get('content-type') || ''
+        const isImage = ct.includes('image/')
+        const isJson = ct.includes('application/json')
+        if (!isImage && !isJson) {
+          setMetadataUriError('Metadata URI returned unexpected content-type')
+          return
+        }
+      } catch (e: any) {
+        setMetadataUriError('Failed to fetch metadata URI')
+      }
+    }
+    run()
+  }, [(pool as any)?.metadataUriHttp])
 
   // Determine if the pool can be migrated by simulating Airlock.migrate(asset)
   const { data: canMigrate, isLoading: isCheckingMigrate } = useQuery({
@@ -856,7 +929,7 @@ export default function PoolDetails() {
           currency0: currency0 as Address,
           currency1: currency1 as Address,
           fee: pool.fee || DYNAMIC_FEE_FLAG, // Dynamic auctions use DYNAMIC_FEE_FLAG
-          tickSpacing: pool.tickSpacing || 8, // Default to 8 - common for Doppler V4 auctions
+          tickSpacing: pool.tickSpacing || 2, // Default to 2 - align with V4 dynamic default
           hooks: (pool.hooks || address) as Address,
         }
 
@@ -1026,7 +1099,7 @@ export default function PoolDetails() {
           currency0: currency0 as Address,
           currency1: currency1 as Address,
           fee: pool.fee || DYNAMIC_FEE_FLAG, // Dynamic auctions use DYNAMIC_FEE_FLAG
-          tickSpacing: pool.tickSpacing || 8, // Default to 8 - common for Doppler V4 auctions
+          tickSpacing: pool.tickSpacing || 2, // Default to 2 - align with V4 dynamic default
           hooks: (pool.hooks || address) as Address,
         }
 
@@ -1777,6 +1850,54 @@ export default function PoolDetails() {
             <div>
               <p className="text-sm text-muted-foreground">Auction Type</p>
               <p className="text-lg">{pool.type === 'v4' ? 'Dynamic (V4)' : 'Static (V3)'}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Metadata URI</p>
+              <div className="text-sm space-y-1">
+                { (pool as any).metadataUriHttp && (
+                  <a
+                    href={(pool as any).metadataUriHttp}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline break-all"
+                  >
+                    {(pool as any).metadataUriHttp}
+                  </a>
+                )}
+                { !(pool as any).metadataUriHttp && (pool as any).metadataUriRaw && (
+                  <p className="break-all">{(pool as any).metadataUriRaw}</p>
+                )}
+                { !(pool as any).metadataUriHttp && !(pool as any).metadataUriRaw && (pool as any).metadataJson && (
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all text-xs bg-muted/30 p-2 rounded">
+                    {(pool as any).metadataJson}
+                  </pre>
+                )}
+                { !(pool as any).metadataUriHttp && !(pool as any).metadataUriRaw && !(pool as any).metadataJson && (
+                  <p className="text-lg">—</p>
+                )}
+                { metadataUriError && (pool as any).metadataUriHttp && (
+                  <div className="mt-2 border border-red-500/30 bg-red-500/10 text-red-600 rounded px-2 py-1 text-xs">
+                    {metadataUriError}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Website URL</p>
+              <div className="text-sm space-y-1">
+                {(pool as any).websiteUrl ? (
+                  <a
+                    href={(pool as any).websiteUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline break-all"
+                  >
+                    {(pool as any).websiteUrl}
+                  </a>
+                ) : (
+                  <p className="text-lg">—</p>
+                )}
+              </div>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Migration</p>

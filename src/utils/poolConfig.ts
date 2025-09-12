@@ -4,9 +4,9 @@ export const TOKEN_TOTAL_SUPPLY = parseEther("1000000000");
 export const TOKEN_NUM_MIN_TO_SELL = parseEther("900000000");
 export const TOKEN_MIN_PROCEEDS = parseEther("100");
 export const TOKEN_MAX_PROCEEDS = parseEther("600");
-export const TOKEN_FEE = 3000;
-export const DEFAULT_START_TICK = 180000;  // Reduced range for better gamma calculation
-export const DEFAULT_END_TICK = 190000;
+export const TOKEN_FEE = 20000; // 2% default for V4 dynamic
+export const DEFAULT_START_TICK = 174312; // Align with pure-markets-interface V4 defaults
+export const DEFAULT_END_TICK = 186840;   // Align with pure-markets-interface V4 defaults
 
 export function tokenParams(token: {
   name: string;
@@ -26,7 +26,8 @@ export function tokenParams(token: {
       startTick: DEFAULT_START_TICK,
       endTick: DEFAULT_END_TICK,
     },
-    tickSpacing: 8,
+    // Align with pure-markets-interface V4 dynamic defaults
+    tickSpacing: 2,
     fee: TOKEN_FEE,
     minProceeds: TOKEN_MIN_PROCEEDS,
     maxProceeds: TOKEN_MAX_PROCEEDS,
