@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button"
 import { Link } from "react-router-dom"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useAccount, useWalletClient, usePublicClient } from "wagmi"
 import { getAddresses } from "@whetstone-research/doppler-sdk"
 import { DopplerSDK, StaticAuctionBuilder, DynamicAuctionBuilder } from "@whetstone-research/doppler-sdk"
@@ -8,6 +8,7 @@ import { parseEther, formatEther, decodeEventLog, type Address } from "viem"
 import { CommandBuilder, SwapRouter02Encoder } from "doppler-router"
 import { getBlock } from "viem/actions"
 import { airlockAbi } from "@whetstone-research/doppler-sdk"
+import { MulticurveConfigForm, defaultMulticurveState, type MulticurveFormState, AIRLOCK_OWNER_SHARE } from "../components/MulticurveConfigForm"
 
 // DN404 ABI for mirrorERC721 function
 const dn404Abi = [
@@ -20,12 +21,20 @@ const dn404Abi = [
   },
 ] as const
 
+const snapTickToSpacing = (tick: number, spacing: number) => {
+  if (!Number.isFinite(tick) || !Number.isFinite(spacing) || spacing <= 0) return tick
+  return Math.round(tick / spacing) * spacing
+}
+
+const CHAIN_ID = 84532 as const
+const ADDRESSES = getAddresses(CHAIN_ID)
+
 export default function CreatePool() {
   const account = useAccount()
   const { data: walletClient } = useWalletClient()
   const publicClient = usePublicClient()
   const [isDeploying, setIsDeploying] = useState(false)
-  const [auctionType, setAuctionType] = useState<'static' | 'dynamic'>('dynamic')
+  const [auctionType, setAuctionType] = useState<'static' | 'dynamic' | 'multicurve'>('dynamic')
   const [isDoppler404, setIsDoppler404] = useState(false)
   const [enableBundlePrebuy, setEnableBundlePrebuy] = useState(false)
   const [prebuyPercent, setPrebuyPercent] = useState<string>('1')
@@ -36,8 +45,10 @@ export default function CreatePool() {
     hookAddress?: string
     poolId?: string
     transactionHash: string
-    auctionType: 'static' | 'dynamic'
+    auctionType: 'static' | 'dynamic' | 'multicurve'
   } | null>(null)
+  const [multicurveConfig, setMulticurveConfig] = useState<MulticurveFormState>(defaultMulticurveState)
+  const [airlockOwnerAddress, setAirlockOwnerAddress] = useState<Address | null>(null)
 
   const [formData, setFormData] = useState({
     tokenName: '',
@@ -50,6 +61,39 @@ export default function CreatePool() {
   // DN404: number of ERC20 base units represented per NFT.
   // We want 1 NFT = 1,000 tokens; tokens have 18 decimals, so use 1000e18.
   const DN404_UNIT = parseEther('1000')
+
+  const auctionLabel = auctionType === 'static' ? 'Static' : auctionType === 'dynamic' ? 'Dynamic' : 'Multicurve'
+
+  useEffect(() => {
+    if (!publicClient) return
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const owner = await publicClient.readContract({
+          address: ADDRESSES.airlock,
+          abi: [{
+            name: 'owner',
+            type: 'function',
+            inputs: [],
+            outputs: [{ name: '', type: 'address' }],
+            stateMutability: 'view',
+          }],
+          functionName: 'owner',
+        }) as Address
+
+        if (!cancelled) {
+          setAirlockOwnerAddress(owner)
+        }
+      } catch (error) {
+        console.error('Failed to fetch airlock owner', error)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [publicClient])
 
 
   const handleDeploy = async (e: React.FormEvent) => {
@@ -65,24 +109,29 @@ export default function CreatePool() {
       const sdk = new DopplerSDK({
         walletClient: walletClient as any,
         publicClient: publicClient as any,
-        chainId: 84532 as const, // Base Sepolia
+        chainId: CHAIN_ID,
       });
 
       const factory = sdk.factory;
-      const addresses = getAddresses(84532);
+      const addresses = ADDRESSES;
       
       // Get airlock owner address for dynamic auction fee streaming
-      const airlockOwner = await publicClient.readContract({
-        address: addresses.airlock,
-        abi: [{
-          name: 'owner',
-          type: 'function',
-          inputs: [],
-          outputs: [{ name: '', type: 'address' }],
-          stateMutability: 'view',
-        }],
-        functionName: 'owner',
-      }) as Address;
+      const airlockOwner = airlockOwnerAddress
+        ?? (await publicClient.readContract({
+          address: addresses.airlock,
+          abi: [{
+            name: 'owner',
+            type: 'function',
+            inputs: [],
+            outputs: [{ name: '', type: 'address' }],
+            stateMutability: 'view',
+          }],
+          functionName: 'owner',
+        }) as Address);
+
+      if (!airlockOwnerAddress) {
+        setAirlockOwnerAddress(airlockOwner)
+      }
       
       // Calculate token supply based on whether it's Doppler404
       const totalSupply = isDoppler404 
@@ -99,7 +148,7 @@ export default function CreatePool() {
         const weth = addresses.weth;
 
         // Build static auction using the new builder pattern
-        const staticBuilder = new StaticAuctionBuilder(84532)
+        const staticBuilder = new StaticAuctionBuilder(CHAIN_ID)
         
         // Configure token based on whether it's Doppler404
         if (isDoppler404) {
@@ -300,6 +349,146 @@ export default function CreatePool() {
         
         return;
       }
+
+      if (auctionType === 'multicurve') {
+        const weth = addresses.weth;
+        const multicurveBuilder = sdk.buildMulticurveAuction();
+
+        if (isDoppler404) {
+          multicurveBuilder.tokenConfig({
+            type: 'doppler404' as const,
+            name: formData.tokenName,
+            symbol: formData.tokenSymbol,
+            baseURI: formData.baseURI || `https://metadata.example.com/${formData.tokenSymbol.toLowerCase()}/`,
+            unit: DN404_UNIT,
+          });
+        } else {
+          multicurveBuilder.tokenConfig({
+            name: formData.tokenName,
+            symbol: formData.tokenSymbol,
+            tokenURI: formData.tokenURI,
+          });
+        }
+
+        const fee = Number(multicurveConfig.fee || '0');
+        if (!Number.isFinite(fee) || fee < 0) {
+          throw new Error('Invalid fee tier for multicurve auction');
+        }
+
+        const tickSpacing = Number(multicurveConfig.tickSpacing || '0');
+        if (!Number.isFinite(tickSpacing) || tickSpacing <= 0) {
+          throw new Error('Tick spacing must be greater than zero for multicurve auction');
+        }
+
+        const curves = multicurveConfig.curves.map((curve, index) => {
+          const tickLower = Number(curve.tickLower);
+          const tickUpper = Number(curve.tickUpper);
+          const numPositions = Number(curve.numPositions);
+          if (!Number.isFinite(tickLower) || !Number.isFinite(tickUpper)) {
+            throw new Error(`Invalid tick bounds for curve ${index + 1}`);
+          }
+          if (!Number.isFinite(numPositions) || numPositions <= 0) {
+            throw new Error(`Number of positions must be positive for curve ${index + 1}`);
+          }
+
+          const snappedLower = snapTickToSpacing(Math.trunc(tickLower), tickSpacing)
+          const snappedUpper = snapTickToSpacing(Math.trunc(tickUpper), tickSpacing)
+
+          if (snappedLower >= snappedUpper) {
+            throw new Error(`Tick lower must be less than tick upper for curve ${index + 1}`)
+          }
+
+          const sharesInput = curve.shares.trim();
+          if (sharesInput.length === 0) {
+            throw new Error(`Shares value required for curve ${index + 1}`);
+          }
+          return {
+            tickLower: Math.trunc(snappedLower),
+            tickUpper: Math.trunc(snappedUpper),
+            numPositions: Math.trunc(numPositions),
+            shares: parseEther(sharesInput),
+          };
+        });
+
+        if (curves.length === 0) {
+          throw new Error('At least one curve must be configured for the multicurve initializer');
+        }
+
+        const sanitizedBeneficiaries = multicurveConfig.beneficiaries.map((beneficiary, index) =>
+          index === 0
+            ? { beneficiary: airlockOwner, shares: AIRLOCK_OWNER_SHARE }
+            : beneficiary
+        )
+
+        const lockableBeneficiaries = multicurveConfig.enableLock
+          ? sanitizedBeneficiaries
+              .filter((beneficiary) => beneficiary.beneficiary.trim().length > 0 && beneficiary.shares.trim().length > 0)
+              .map((beneficiary, index) => {
+                const addressInput = beneficiary.beneficiary.trim();
+                if (!addressInput.startsWith('0x') || addressInput.length !== 42) {
+                  throw new Error(`Beneficiary ${index + 1} must be a valid address`);
+                }
+                const shareInput = beneficiary.shares.trim();
+                return {
+                  beneficiary: addressInput as Address,
+                  shares: parseEther(shareInput),
+                };
+              })
+          : undefined;
+
+        const poolConfig = {
+          fee: Math.trunc(fee),
+          tickSpacing: Math.trunc(tickSpacing),
+          curves,
+          lockableBeneficiaries: lockableBeneficiaries && lockableBeneficiaries.length > 0 ? lockableBeneficiaries : undefined,
+        };
+
+        const multicurveParams = multicurveBuilder
+          .saleConfig({
+            initialSupply: totalSupply,
+            numTokensToSell: numTokensToSell,
+            numeraire: weth,
+          })
+          .withMulticurveAuction(poolConfig)
+          .withGovernance({ type: 'default' as const })
+          .withMigration({ type: 'uniswapV2' as const })
+          .withUserAddress(account.address)
+          .withIntegrator(account.address)
+          .build();
+
+        const { asset, pool } = await factory.simulateCreateMulticurve(multicurveParams);
+        console.log('Predicted multicurve token address:', asset);
+        console.log('Predicted multicurve pool address:', pool);
+
+        const result = await factory.createMulticurve(multicurveParams);
+        console.log(`${isDoppler404 ? 'Doppler404 ' : ''}multicurve auction deployment submitted!`);
+        console.log('Transaction hash:', result.transactionHash);
+        console.log('Token address:', result.tokenAddress);
+        console.log('Pool address:', result.poolAddress);
+
+        let nftAddress: Address | undefined;
+        if (isDoppler404) {
+          try {
+            nftAddress = await publicClient.readContract({
+              address: result.tokenAddress as Address,
+              abi: dn404Abi,
+              functionName: 'mirrorERC721',
+            });
+          } catch (error) {
+            console.error('Failed to fetch Doppler404 mirror address for multicurve:', error);
+          }
+        }
+
+        setDeploymentResult({
+          tokenAddress: result.tokenAddress,
+          nftAddress,
+          poolAddress: result.poolAddress,
+          transactionHash: result.transactionHash,
+          auctionType: 'multicurve',
+        });
+
+        return;
+      }
       
       // Dynamic auction configuration using the new builder pattern
       // Get latest block timestamp and set an explicit start offset for safety
@@ -307,7 +496,7 @@ export default function CreatePool() {
       const startTimeOffsetSec = 5 * 60; // 5 minutes buffer to avoid InvalidStartTime
       
       // Build dynamic auction using the new builder pattern
-      const dynamicBuilder = new DynamicAuctionBuilder(84532)
+      const dynamicBuilder = new DynamicAuctionBuilder(CHAIN_ID)
       
       // Configure token based on whether it's Doppler404
       if (isDoppler404) {
@@ -421,7 +610,7 @@ export default function CreatePool() {
           <form onSubmit={handleDeploy} className="space-y-6">
             <div className="space-y-2">
               <label className="text-sm font-medium">Auction Type</label>
-              <div className="flex gap-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
                 <button
                   type="button"
                   onClick={() => setAuctionType('static')}
@@ -444,11 +633,24 @@ export default function CreatePool() {
                 >
                   Dynamic Auction (V4)
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setAuctionType('multicurve')}
+                  className={`flex-1 px-4 py-2 rounded-md transition-colors ${
+                    auctionType === 'multicurve'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-background/50 border border-input hover:bg-background/70'
+                  }`}
+                >
+                  Multicurve Initializer (V4)
+                </button>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                {auctionType === 'static' 
+                {auctionType === 'static'
                   ? 'Traditional bonding curve with fixed liquidity distribution across price range'
-                  : 'Dutch auction with dynamic rebalancing across epochs'}
+                  : auctionType === 'dynamic'
+                    ? 'Dutch auction with dynamic rebalancing across epochs'
+                    : 'Seed multiple Uniswap V4 bonding curves in a single initializer with weighted shares'}
               </p>
             </div>
             
@@ -508,6 +710,15 @@ export default function CreatePool() {
                   </div>
                 )}
               </div>
+            )}
+
+            {auctionType === 'multicurve' && (
+              <MulticurveConfigForm
+                value={multicurveConfig}
+                onChange={setMulticurveConfig}
+                disabled={isDeploying}
+                airlockOwner={airlockOwnerAddress ?? ''}
+              />
             )}
 
             <div className="space-y-2">
@@ -603,7 +814,7 @@ export default function CreatePool() {
                   className="flex-1 bg-primary/90 hover:bg-primary/80"
                   disabled={isDeploying || !account.isConnected}
                 >
-                  {isDeploying ? "Deploying..." : `Create ${isDoppler404 ? 'Doppler404' : ''} ${auctionType === 'static' ? 'Static' : 'Dynamic'} Token`}
+                  {isDeploying ? "Deploying..." : `Create ${isDoppler404 ? 'Doppler404 ' : ''}${auctionLabel} Token`}
                 </Button>
               </div>
               <Link to="/" className="block">
@@ -686,10 +897,11 @@ export default function CreatePool() {
                 )}
                 {/* Link to the pool details page */}
                 {(() => {
-                  const chainId = 84532; // Base Sepolia for this miniapp
-                  const v4Hook = deploymentResult.auctionType === 'dynamic' ? deploymentResult.hookAddress : undefined;
-                  const v3Pool = deploymentResult.auctionType === 'static' ? deploymentResult.poolAddress : undefined;
-                  const poolPageAddress = (v4Hook || v3Pool);
+                  const chainId = CHAIN_ID; // Base Sepolia for this miniapp
+                  const poolPageAddress =
+                    deploymentResult.auctionType === 'dynamic'
+                      ? deploymentResult.hookAddress
+                      : deploymentResult.poolAddress;
                   if (!poolPageAddress) return null;
                   return (
                     <Link to={`/pool/${poolPageAddress}?chainId=${chainId}`}>
