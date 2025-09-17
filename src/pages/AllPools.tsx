@@ -24,6 +24,11 @@ function PoolCard({ pool }: { pool: Pool }) {
     }).format(value / 100)
   }
 
+  const normalizedType = pool.type?.toLowerCase()
+  const isMulticurve = normalizedType === 'multicurve'
+  const isV4Like = isMulticurve || normalizedType === 'v4' || normalizedType === 'dynamicauction' || normalizedType === 'hook' || !pool.type
+  const poolTypeBadge = isMulticurve ? '🌀 Multicurve' : isV4Like ? '🚀 Dynamic' : '📊 Static'
+
   return (
     <div className="border border-primary/20 rounded-lg p-6 bg-card/50 backdrop-blur hover:border-primary/40 transition-all">
       <div className="flex justify-between items-start mb-4">
@@ -35,7 +40,7 @@ function PoolCard({ pool }: { pool: Pool }) {
             {pool.baseToken.name} / {pool.quoteToken.name}
           </p>
           <div className="inline-flex items-center mt-2 px-2 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
-            {pool.type === 'v4' ? '🚀 Dynamic' : '📊 Static'}
+            {poolTypeBadge}
           </div>
         </div>
         <div className="text-right">
