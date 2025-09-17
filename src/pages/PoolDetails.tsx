@@ -117,6 +117,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 // V4 Dynamic Fee Flag - indicates a pool uses dynamic fees
 const DYNAMIC_FEE_FLAG = 0x800000 // 8388608 in decimal
 
+// Universal Router action constants used when settling from router balance
+const CONTRACT_BALANCE = BigInt("0x8000000000000000000000000000000000000000000000000000000000000000")
+const OPEN_DELTA = 0n
+
 const client = new GraphQLClient("https://multicurve-testnet.marble.live/")
 
 const GET_POOL_QUERY = `
@@ -1099,6 +1103,8 @@ export default function PoolDetails() {
     // V4 pools may have type as "v4" (lowercase), "V4", "DynamicAuction", etc.
     const poolType = pool.type?.toLowerCase()
     const isMulticurvePool = poolType === 'multicurve'
+    const isDynamicAuction = !!pool.v4Config
+    const shouldUseSdkSwap = isDynamicAuction || isMulticurvePool
     const isV4Pool = poolType === "v4" || poolType === "dynamicauction" || 
                      poolType === "hook" || isMulticurvePool || !pool.type // If type is missing, assume V4
     
@@ -1129,11 +1135,42 @@ export default function PoolDetails() {
         const minOut = (lastQuoteReliable && quotedAmount) ? (quotedAmount * (10000n - DEFAULT_SLIPPAGE_BPS)) / 10000n : 0n
         console.log('[SWAP][V4] amountIn:', amountIn.toString(), 'quotedAmount:', quotedAmount?.toString(), 'minOut:', minOut.toString())
 
-        const actionBuilder = new V4ActionBuilder()
-        const [actions, params] = actionBuilder
-          .addSwapExactInSingle(key, zeroForOne, amountIn, minOut, "0x")
-          .addAction(V4ActionType.SETTLE_ALL, [zeroForOne ? key.currency0 : key.currency1, maxUint256])
-          .addAction(V4ActionType.TAKE_ALL, [zeroForOne ? key.currency1 : key.currency0, 0]).build()
+        const hookData: Hex = '0x'
+        const inputCurrency = zeroForOne ? key.currency0 : key.currency1
+        const outputCurrency = zeroForOne ? key.currency1 : key.currency0
+        const isNativeInput = inputCurrency.toLowerCase() === zeroAddress.toLowerCase()
+        const wethLower = addresses.weth?.toLowerCase()
+        const expectsWethInput = wethLower ? inputCurrency.toLowerCase() === wethLower : false
+        const shouldWrapForWeth = expectsWethInput && isBuying
+
+        const buildV4Actions = () => {
+          const actionBuilder = new V4ActionBuilder()
+          if (shouldWrapForWeth) {
+            actionBuilder.addAction(V4ActionType.SETTLE, [inputCurrency, CONTRACT_BALANCE, false])
+            actionBuilder.addSwapExactInSingle(key, zeroForOne, OPEN_DELTA, minOut, hookData)
+          } else {
+            actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, minOut, hookData)
+            actionBuilder.addAction(V4ActionType.SETTLE_ALL, [inputCurrency, maxUint256])
+          }
+          actionBuilder.addAction(V4ActionType.TAKE_ALL, [outputCurrency, 0])
+          return actionBuilder.build()
+        }
+
+        let actions: Hex | undefined
+        let params: Hex[] | undefined
+
+        if (shouldUseSdkSwap) {
+          try {
+            ;[actions, params] = buildV4Actions()
+          } catch (builderError) {
+            const context = isMulticurvePool ? '[SWAP][Multicurve]' : '[SWAP][DynamicAuction]'
+            console.error(`${context} SDK swap builder failed`, builderError)
+          }
+        }
+
+        if (!actions || !params) {
+          ;[actions, params] = buildV4Actions()
+        }
 
         // Build commands, prepending Permit2 permit if selling ERC20
         const builder = new CommandBuilder()
@@ -1184,19 +1221,23 @@ export default function PoolDetails() {
           }
         }
 
-        const [commands, inputs] = builder.addV4Swap(actions, params).build()
+        const shouldWrapInput = isNativeInput || shouldWrapForWeth
+
+        const builderWithLiquidity = shouldWrapInput
+          ? builder.addWrapEth(universalRouter, amountIn)
+          : builder
+
+        const [commands, inputs] = builderWithLiquidity.addV4Swap(actions, params).build()
 
         // Determine if the input currency is native (requires sending `value`)
-        const inputCurrency = zeroForOne ? key.currency0 : key.currency1
-        const isNativeInput = inputCurrency.toLowerCase() === zeroAddress.toLowerCase()
-        console.log('[SWAP][V4] key:', key, 'zeroForOne:', zeroForOne, 'isNativeInput:', isNativeInput, 'hookData: 0x')
+        console.log('[SWAP][V4] key:', key, 'zeroForOne:', zeroForOne, 'isNativeInput:', isNativeInput, 'shouldWrapForWeth:', shouldWrapForWeth, 'hookData:', hookData)
 
         const txHash = await walletClient?.writeContract({
           address: universalRouter,
           abi: universalRouterAbi,
           functionName: "execute",
           args: [commands, inputs],
-          value: isNativeInput ? amountIn : 0n
+          value: shouldWrapInput ? amountIn : 0n
         })
         if (txHash) {
           const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
