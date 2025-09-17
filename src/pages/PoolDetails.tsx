@@ -117,12 +117,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 // V4 Dynamic Fee Flag - indicates a pool uses dynamic fees
 const DYNAMIC_FEE_FLAG = 0x800000 // 8388608 in decimal
 
-const client = new GraphQLClient("https://doppler-sdk-s1ck.marble.live/")
+const client = new GraphQLClient("https://multicurve-testnet.marble.live/")
 
 const GET_POOL_QUERY = `
-  query GetPool($address: String!, $chainId: BigInt!) {
+  query GetPool($address: String!, $chainId: Float!) {
     pools(
-      where: { address: $address, chainId: $chainId }
+      where: { address: $address }
       limit: 1
     ) {
       items {
@@ -138,7 +138,6 @@ const GET_POOL_QUERY = `
         fee
         type
         dollarLiquidity
-        dailyVolume { volumeUsd }
         volumeUsd
         percentDayChange
         totalFee0
@@ -159,7 +158,7 @@ const GET_POOL_QUERY = `
       }
     }
     # Try to get V4 pool config if it's a dynamic auction
-    v4PoolConfig(hookAddress: $address) {
+    v4PoolConfig(hookAddress: $address, chainId: $chainId) {
       hookAddress
       isToken0
       numTokensToSell
@@ -229,8 +228,6 @@ export default function PoolDetails() {
   const addresses = getAddresses(chainId)
   const { universalRouter } = addresses
 
-  console.log('Pool address:', address)
-  console.log('Chain ID from URL:', chainId)
 
   // Auto-switch wallet network to chainId from query if connected and supported
   useEffect(() => {
@@ -250,10 +247,12 @@ export default function PoolDetails() {
     queryKey: ['pool', address, chainId],
     queryFn: async () => {
       console.log('Fetching pool with:', { address, chainId })
+      console.log("here?")
       const response = await client.request<{ pools: { items: any[] }, v4PoolConfig?: any }>(GET_POOL_QUERY, {
         address,
         chainId,
       })
+      console.log(response)
       console.log('Full pool GraphQL response:', response)
       const p = response.pools.items?.[0]
       if (!p) return undefined as any
@@ -337,7 +336,6 @@ export default function PoolDetails() {
         fee: p.fee,
         type: p.type || 'v3',
         dollarLiquidity: BigInt(p.dollarLiquidity),
-        dailyVolume: p.dailyVolume ? { volumeUsd: BigInt(p.dailyVolume.volumeUsd) } : null,
         asset: p.asset ? {
           marketCapUsd: BigInt(p.asset.marketCapUsd),
           migrated: p.asset.migrated,
