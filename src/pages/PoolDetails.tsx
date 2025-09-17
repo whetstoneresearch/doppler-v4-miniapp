@@ -1154,7 +1154,11 @@ export default function PoolDetails() {
             actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, minOut, hookData)
             actionBuilder.addAction(V4ActionType.SETTLE_ALL, [inputCurrency, maxUint256])
           }
-          actionBuilder.addAction(V4ActionType.TAKE_ALL, [outputCurrency, 0])
+          if (shouldUnwrapOutput && universalRouter) {
+            actionBuilder.addAction(V4ActionType.TAKE, [outputCurrency, universalRouter as Address, OPEN_DELTA])
+          } else {
+            actionBuilder.addAction(V4ActionType.TAKE_ALL, [outputCurrency, 0])
+          }
           return actionBuilder.build()
         }
 
