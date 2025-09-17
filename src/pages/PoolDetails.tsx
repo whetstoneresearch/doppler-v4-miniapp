@@ -1141,7 +1141,9 @@ export default function PoolDetails() {
         const isNativeInput = inputCurrency.toLowerCase() === zeroAddress.toLowerCase()
         const wethLower = addresses.weth?.toLowerCase()
         const expectsWethInput = wethLower ? inputCurrency.toLowerCase() === wethLower : false
+        const outputsWeth = wethLower ? outputCurrency.toLowerCase() === wethLower : false
         const shouldWrapForWeth = expectsWethInput && isBuying
+        const shouldUnwrapOutput = outputsWeth && !isBuying
 
         const buildV4Actions = () => {
           const actionBuilder = new V4ActionBuilder()
@@ -1223,14 +1225,21 @@ export default function PoolDetails() {
 
         const shouldWrapInput = isNativeInput || shouldWrapForWeth
 
-        const builderWithLiquidity = shouldWrapInput
-          ? builder.addWrapEth(universalRouter, amountIn)
-          : builder
+        let commandBuilderWithLiquidity = builder
+        if (shouldWrapInput) {
+          commandBuilderWithLiquidity = builder.addWrapEth(universalRouter, amountIn)
+        }
 
-        const [commands, inputs] = builderWithLiquidity.addV4Swap(actions, params).build()
+        let commandBuilderWithSwap = commandBuilderWithLiquidity.addV4Swap(actions, params)
+
+        if (shouldUnwrapOutput) {
+          commandBuilderWithSwap = commandBuilderWithSwap.addUnwrapWeth(account.address as Address, 0n)
+        }
+
+        const [commands, inputs] = commandBuilderWithSwap.build()
 
         // Determine if the input currency is native (requires sending `value`)
-        console.log('[SWAP][V4] key:', key, 'zeroForOne:', zeroForOne, 'isNativeInput:', isNativeInput, 'shouldWrapForWeth:', shouldWrapForWeth, 'hookData:', hookData)
+        console.log('[SWAP][V4] key:', key, 'zeroForOne:', zeroForOne, 'isNativeInput:', isNativeInput, 'shouldWrapForWeth:', shouldWrapForWeth, 'shouldUnwrapOutput:', shouldUnwrapOutput, 'hookData:', hookData)
 
         const txHash = await walletClient?.writeContract({
           address: universalRouter,
