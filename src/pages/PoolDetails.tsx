@@ -147,6 +147,7 @@ const GET_POOL_QUERY = `
         isContentCoin
         lastRefreshed
         lastSwapTimestamp
+        poolKey
         reserves0
         reserves1
         asset {
@@ -260,27 +261,6 @@ export default function PoolDetails() {
       // Check if we have V4 pool config data (for dynamic auctions)
       const v4Config = response.v4PoolConfig
       
-      // For V4 dynamic auctions, derive currency0 and currency1 from baseToken/quoteToken
-      // based on isToken0 from v4Config
-      let currency0 = p.currency0
-      let currency1 = p.currency1
-      
-      if (!currency0 && !currency1 && v4Config) {
-        // For dynamic auctions, we need to derive currencies from base/quote tokens
-        // In Uniswap V4, token0 is always the smaller address (lexicographically)
-        const baseTokenAddr = p.baseToken?.address as Address
-        const quoteTokenAddr = p.quoteToken?.address as Address
-        
-        // Sort addresses to determine token0 and token1
-        // token0 is always the smaller address
-        const sorted = [baseTokenAddr, quoteTokenAddr].sort((a, b) => 
-          a.toLowerCase() < b.toLowerCase() ? -1 : 1
-        )
-        
-        currency0 = sorted[0]
-        currency1 = sorted[1]
-      }
-      
       // Resolve metadata (image and website URL) from indexer token fields
       const resolveMetadataUri = (token: any): { raw?: string; http?: string; json?: string; websiteUrl?: string } => {
         // Prefer explicit image fields from indexer, then tokenUriData
@@ -323,6 +303,59 @@ export default function PoolDetails() {
       })
 
       // Normalize into Pool shape used by UI
+      const rawPoolKey = p.poolKey
+      const indexerPoolKey = (() => {
+        if (!rawPoolKey) return undefined
+        try {
+          return typeof rawPoolKey === 'string' ? JSON.parse(rawPoolKey) : rawPoolKey
+        } catch (err) {
+          console.warn('Failed to parse poolKey from indexer', err)
+          return undefined
+        }
+      })()
+
+      const normalizedPoolKey = (indexerPoolKey && typeof indexerPoolKey === 'object'
+        && 'currency0' in indexerPoolKey && 'currency1' in indexerPoolKey)
+        ? {
+            currency0: (indexerPoolKey as any).currency0 as string,
+            currency1: (indexerPoolKey as any).currency1 as string,
+            fee: (() => {
+              const raw = (indexerPoolKey as any).fee
+              if (raw === undefined || raw === null) return undefined
+              const value = typeof raw === 'number' ? raw : Number(raw)
+              return Number.isFinite(value) ? value : undefined
+            })(),
+            tickSpacing: (() => {
+              const raw = (indexerPoolKey as any).tickSpacing
+              if (raw === undefined || raw === null) return undefined
+              const value = typeof raw === 'number' ? raw : Number(raw)
+              return Number.isFinite(value) ? value : undefined
+            })(),
+            hooks: (indexerPoolKey as any).hooks as string | undefined,
+          }
+        : undefined
+
+      // For V4 dynamic auctions, derive currency0 and currency1 from baseToken/quoteToken
+      // based on isToken0 from v4Config, unless the indexer already provided them
+      let currency0 = normalizedPoolKey?.currency0 || p.currency0
+      let currency1 = normalizedPoolKey?.currency1 || p.currency1
+
+      if (!currency0 && !currency1 && v4Config) {
+        // For dynamic auctions, we need to derive currencies from base/quote tokens
+        // In Uniswap V4, token0 is always the smaller address (lexicographically)
+        const baseTokenAddr = p.baseToken?.address as Address
+        const quoteTokenAddr = p.quoteToken?.address as Address
+
+        // Sort addresses to determine token0 and token1
+        // token0 is always the smaller address
+        const sorted = [baseTokenAddr, quoteTokenAddr].sort((a, b) =>
+          a.toLowerCase() < b.toLowerCase() ? -1 : 1
+        )
+
+        currency0 = sorted[0]
+        currency1 = sorted[1]
+      }
+
       const normalized: (Pool & { v4Config?: any }) & { metadataUriRaw?: string; metadataUriHttp?: string; metadataJson?: string; websiteUrl?: string } = {
         address: p.address,
         chainId: BigInt(p.chainId),
@@ -333,7 +366,7 @@ export default function PoolDetails() {
         baseToken: p.baseToken,
         quoteToken: p.quoteToken,
         price: BigInt(p.price),
-        fee: p.fee,
+        fee: normalizedPoolKey?.fee ?? p.fee,
         type: p.type || 'v3',
         dollarLiquidity: BigInt(p.dollarLiquidity),
         asset: p.asset ? {
@@ -354,17 +387,11 @@ export default function PoolDetails() {
         reserves0: BigInt(p.reserves0),
         reserves1: BigInt(p.reserves1),
         // V4 pools might have poolKey data
-        poolKey: (currency0 && currency1) ? {
-          currency0: currency0,
-          currency1: currency1,
-          fee: p.fee,
-          tickSpacing: p.tickSpacing,
-          hooks: p.hooks || p.address,
-        } : undefined,
-        currency0: currency0,
-        currency1: currency1,
-        tickSpacing: p.tickSpacing,
-        hooks: p.hooks || p.address,
+        poolKey: normalizedPoolKey,
+        currency0: normalizedPoolKey?.currency0 || currency0,
+        currency1: normalizedPoolKey?.currency1 || currency1,
+        tickSpacing: normalizedPoolKey?.tickSpacing ?? p.tickSpacing,
+        hooks: (normalizedPoolKey?.hooks as string | undefined) || p.hooks || p.address,
         // Add V4 config if available
         v4Config: v4Config || undefined,
         metadataUriRaw: meta.raw,
@@ -823,19 +850,25 @@ export default function PoolDetails() {
       stateMutability: "view",
       inputs: [
         {
-          name: "key",
+          name: "params",
           type: "tuple",
           components: [
-            { name: "currency0", type: "address" },
-            { name: "currency1", type: "address" },
-            { name: "fee", type: "uint24" },
-            { name: "tickSpacing", type: "int24" },
-            { name: "hooks", type: "address" },
+            {
+              name: "poolKey",
+              type: "tuple",
+              components: [
+                { name: "currency0", type: "address" },
+                { name: "currency1", type: "address" },
+                { name: "fee", type: "uint24" },
+                { name: "tickSpacing", type: "int24" },
+                { name: "hooks", type: "address" },
+              ],
+            },
+            { name: "zeroForOne", type: "bool" },
+            { name: "exactAmount", type: "uint256" },
+            { name: "hookData", type: "bytes" },
           ],
         },
-        { name: "zeroForOne", type: "bool" },
-        { name: "exactAmount", type: "uint256" },
-        { name: "hookData", type: "bytes" },
       ],
       outputs: [
         { name: "amountOut", type: "uint256" },
@@ -850,6 +883,23 @@ export default function PoolDetails() {
       a?.uniswapV4Quoter ||
       a?.quoter
     ) as Address | undefined
+  }
+
+  const resolvePoolKey = () => {
+    if (!pool?.poolKey?.currency0 || !pool.poolKey?.currency1) return null
+    const feeRaw = pool.poolKey.fee ?? pool.fee ?? DYNAMIC_FEE_FLAG
+    const feeParsed = typeof feeRaw === 'number' ? feeRaw : Number(feeRaw)
+    const fee = Number.isFinite(feeParsed) ? feeParsed : DYNAMIC_FEE_FLAG
+    const tickSpacingRaw = pool.poolKey.tickSpacing ?? pool.tickSpacing ?? 2
+    const tickSpacingParsed = typeof tickSpacingRaw === 'number' ? tickSpacingRaw : Number(tickSpacingRaw)
+    const tickSpacing = Number.isFinite(tickSpacingParsed) ? tickSpacingParsed : 2
+    return {
+      currency0: pool.poolKey.currency0 as Address,
+      currency1: pool.poolKey.currency1 as Address,
+      fee,
+      tickSpacing,
+      hooks: (pool.poolKey.hooks || pool.hooks || pool.address) as Address,
+    }
   }
 
   // (currency sorting helper removed; rely on indexer isToken0)
@@ -892,61 +942,35 @@ export default function PoolDetails() {
     // Check if this is a V4 pool with a hook
     // V4 pools may have type as 'v4' (lowercase), 'V4', 'DynamicAuction', etc.
     const poolType = pool.type?.toLowerCase()
+    const isMulticurvePool = poolType === 'multicurve'
     const isV4Pool = poolType === 'v4' || poolType === 'dynamicauction' || 
-                     poolType === 'hook' || !pool.type // If type is missing, assume V4
+                     poolType === 'hook' || isMulticurvePool || !pool.type // If type is missing, assume V4
     
     if (isV4Pool && !isMigrated) {
       try {
-        // Use PoolKey directly from indexer data, but handle missing currency fields
-        // For dynamic auctions, currency0/currency1 might not be set, so derive from base/quote tokens
-        let currency0 = pool.currency0
-        let currency1 = pool.currency1
-        
-        if (!currency0 || !currency1) {
-          // Fallback: derive from base/quote tokens
-          // In Uniswap V4, token0 is always the smaller address (lexicographically)
-          const baseTokenAddr = pool.baseToken?.address as Address
-          const quoteTokenAddr = pool.quoteToken?.address as Address
-          
-          // Sort addresses to determine token0 and token1
-          const sorted = [baseTokenAddr, quoteTokenAddr].sort((a, b) => 
-            a.toLowerCase() < b.toLowerCase() ? -1 : 1
-          )
-          
-          currency0 = sorted[0]
-          currency1 = sorted[1]
-        }
-        
-        if (!currency0 || !currency1) {
-          console.error('Cannot determine currency0/currency1 for V4 pool')
+        const key = resolvePoolKey()
+        if (!key) {
+          console.error('Cannot resolve pool key for V4 pool')
           return null
-        }
-        
-        // Build the pool key with properly sorted addresses
-        const key = {
-          currency0: currency0 as Address,
-          currency1: currency1 as Address,
-          fee: pool.fee || DYNAMIC_FEE_FLAG, // Dynamic auctions use DYNAMIC_FEE_FLAG
-          tickSpacing: pool.tickSpacing || 2, // Default to 2 - align with V4 dynamic default
-          hooks: (pool.hooks || address) as Address,
         }
 
         // Determine swap direction based on sorted addresses
         const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
         const curr0Lower = key.currency0.toLowerCase()
-        
+
         // Determine if base token is currency0 or currency1
         const isBaseToken0 = baseTokenAddr === curr0Lower
-        
+
         // For buying (quote -> base), we're swapping FROM quote TO base
         // For selling (base -> quote), we're swapping FROM base TO quote
         const zeroForOne = isBuying 
           ? !isBaseToken0  // If buying and base is token1, swap 0->1. If base is token0, swap 1->0
           : isBaseToken0   // If selling and base is token0, swap 0->1. If base is token1, swap 1->0
 
-        // Dynamic auctions: use SDK Uniswap V4 Quoter helper (identical args to Lens)
+        // Dynamic auctions + multicurve: use SDK Uniswap V4 Quoter helper (identical args to Lens)
         const isDynamicAuction = !!pool.v4Config
-        if (isDynamicAuction) {
+        const shouldUseSdkQuoter = isDynamicAuction || isMulticurvePool
+        if (shouldUseSdkQuoter) {
           try {
             const quoter = new Quoter(publicClient, chainId)
             const quote = await quoter.quoteExactInputV4Quoter({
@@ -959,27 +983,33 @@ export default function PoolDetails() {
             setLastQuoteReliable(true)
             return quote.amountOut
           } catch (e) {
-            console.error('[QUOTE][V4][Quoter] failed, falling back to Lens', e)
+            const context = isMulticurvePool ? '[QUOTE][Multicurve]' : '[QUOTE][DynamicAuction]'
+            console.error(`${context} SDK quoter failed`, e)
           }
 
-          // Fallback: DopplerLens (indicative only)
-          const dopplerLensAddress = addresses?.dopplerLens
-          if (!dopplerLensAddress) {
-            console.error('DopplerLens address not found in addresses')
-            return null
+          if (isDynamicAuction) {
+            // Fallback: DopplerLens (indicative only)
+            const dopplerLensAddress = addresses?.dopplerLens
+            if (!dopplerLensAddress) {
+              console.error('DopplerLens address not found in addresses')
+              return null
+            }
+            const params = { poolKey: key, zeroForOne, exactAmount: amountIn, hookData: '0x' as `0x${string}` }
+            try {
+              const { result } = await publicClient.simulateContract({ address: dopplerLensAddress as Address, abi: dopplerLensQuoterAbi, functionName: 'quoteDopplerLensData', args: [params] })
+              const amountOut = zeroForOne ? result.amount1 : result.amount0
+              console.log('[QUOTE][V4][Lens] amountOut (indicative):', amountOut.toString())
+              setLastQuoteReliable(false)
+              return amountOut
+            } catch (error) {
+              console.error('DopplerLens quote simulation failed', error)
+              return null
+            }
           }
-          const params = { poolKey: key, zeroForOne, exactAmount: amountIn, hookData: '0x' as `0x${string}` }
-          try {
-            const { result } = await publicClient.simulateContract({ address: dopplerLensAddress as Address, abi: dopplerLensQuoterAbi, functionName: 'quoteDopplerLensData', args: [params] })
-            const amountOut = zeroForOne ? result.amount1 : result.amount0
-            console.log('[QUOTE][V4][Lens] amountOut (indicative):', amountOut.toString())
-            setLastQuoteReliable(false)
-            return amountOut
-          } catch (error) {
-            console.error('DopplerLens quote simulation failed', error)
-            return null
-          }
-        } else {
+          // For multicurve pools we fall through to the standard V4 path below if the SDK helper fails
+        }
+
+        if (!isDynamicAuction) {
           // Standard V4 pool (not dynamic auction)
           const v4QuoterAddress = resolveV4QuoterAddress()
           if (!v4QuoterAddress) {
@@ -992,15 +1022,21 @@ export default function PoolDetails() {
               hookData: '0x',
             })
             setLastQuoteReliable(true)
-        return quote.amountOut
-      }
+            return quote.amountOut
+          }
           console.log('Using Uniswap v4 Quoter:', v4QuoterAddress)
-          console.log('quote params', { key, zeroForOne, amountIn: amountIn.toString(), hookData: '0x' })
+          const quoterParams = {
+            poolKey: key,
+            zeroForOne,
+            exactAmount: amountIn,
+            hookData: '0x' as Hex,
+          }
+          console.log('quote params', quoterParams)
           const result = await publicClient.readContract({
             address: v4QuoterAddress,
             abi: uniswapV4QuoterAbi,
             functionName: 'quoteExactInputSingle',
-            args: [key, zeroForOne, amountIn, '0x'],
+            args: [quoterParams],
           }) as any
           const amountOut: bigint = typeof result === "bigint" ? result : (result?.amountOut as bigint)
           setLastQuoteReliable(true)
@@ -1062,52 +1098,25 @@ export default function PoolDetails() {
     // Check if this is a V4 pool
     // V4 pools may have type as "v4" (lowercase), "V4", "DynamicAuction", etc.
     const poolType = pool.type?.toLowerCase()
+    const isMulticurvePool = poolType === 'multicurve'
     const isV4Pool = poolType === "v4" || poolType === "dynamicauction" || 
-                     poolType === "hook" || !pool.type // If type is missing, assume V4
+                     poolType === "hook" || isMulticurvePool || !pool.type // If type is missing, assume V4
     
     if (isV4Pool && !isMigrated) {
       try {
-        // Use PoolKey directly from indexer data, but handle missing currency fields
-        // For dynamic auctions, currency0/currency1 might not be set, so derive from base/quote tokens
-        let currency0 = pool.currency0
-        let currency1 = pool.currency1
-        
-        if (!currency0 || !currency1) {
-          // Fallback: derive from base/quote tokens
-          // In Uniswap V4, token0 is always the smaller address (lexicographically)
-          const baseTokenAddr = pool.baseToken?.address as Address
-          const quoteTokenAddr = pool.quoteToken?.address as Address
-          
-          // Sort addresses to determine token0 and token1
-          const sorted = [baseTokenAddr, quoteTokenAddr].sort((a, b) => 
-            a.toLowerCase() < b.toLowerCase() ? -1 : 1
-          )
-          
-          currency0 = sorted[0]
-          currency1 = sorted[1]
-        }
-        
-        if (!currency0 || !currency1) {
-          console.error("Cannot determine currency0/currency1 for V4 pool")
+        const key = resolvePoolKey()
+        if (!key) {
+          console.error('Cannot resolve pool key for V4 pool during swap')
           return null
-        }
-        
-        // Build the pool key with properly sorted addresses
-        const key = {
-          currency0: currency0 as Address,
-          currency1: currency1 as Address,
-          fee: pool.fee || DYNAMIC_FEE_FLAG, // Dynamic auctions use DYNAMIC_FEE_FLAG
-          tickSpacing: pool.tickSpacing || 2, // Default to 2 - align with V4 dynamic default
-          hooks: (pool.hooks || address) as Address,
         }
 
         // Determine swap direction based on sorted addresses
         const baseTokenAddr = pool.baseToken?.address?.toLowerCase()
         const curr0Lower = key.currency0.toLowerCase()
-        
+
         // Determine if base token is currency0 or currency1
         const isBaseToken0 = baseTokenAddr === curr0Lower
-        
+
         // For buying (quote -> base), we're swapping FROM quote TO base
         // For selling (base -> quote), we're swapping FROM base TO quote
         const zeroForOne = isBuying 
@@ -1121,9 +1130,10 @@ export default function PoolDetails() {
         console.log('[SWAP][V4] amountIn:', amountIn.toString(), 'quotedAmount:', quotedAmount?.toString(), 'minOut:', minOut.toString())
 
         const actionBuilder = new V4ActionBuilder()
-        const [actions, params] = actionBuilder.addSwapExactInSingle(key, zeroForOne, amountIn, minOut, "0x")
-        .addAction(V4ActionType.SETTLE_ALL, [zeroForOne ? key.currency0 : key.currency1, maxUint256])
-        .addAction(V4ActionType.TAKE_ALL, [zeroForOne ? key.currency1 : key.currency0, 0]).build()
+        const [actions, params] = actionBuilder
+          .addSwapExactInSingle(key, zeroForOne, amountIn, minOut, "0x")
+          .addAction(V4ActionType.SETTLE_ALL, [zeroForOne ? key.currency0 : key.currency1, maxUint256])
+          .addAction(V4ActionType.TAKE_ALL, [zeroForOne ? key.currency1 : key.currency0, 0]).build()
 
         // Build commands, prepending Permit2 permit if selling ERC20
         const builder = new CommandBuilder()
@@ -1779,6 +1789,20 @@ export default function PoolDetails() {
     )
   }
 
+  const normalizedPoolType = pool.type?.toLowerCase()
+  const isMulticurvePool = normalizedPoolType === 'multicurve'
+  const isV4LikePool = isMulticurvePool || normalizedPoolType === 'v4' || normalizedPoolType === 'dynamicauction' || normalizedPoolType === 'hook' || !pool.type
+  const poolTypeBadgeLabel = isMulticurvePool
+    ? '🌀 Multicurve'
+    : isV4LikePool
+      ? '🚀 Dynamic Auction'
+      : '📊 Static Auction'
+  const auctionTypeLabel = isMulticurvePool
+    ? 'Multicurve (V4)'
+    : isV4LikePool
+      ? 'Dynamic (V4)'
+      : 'Static (V3)'
+
   return (
     <div className="p-8">
       <h1 className="text-4xl font-bold mb-8 text-primary">Pool Details</h1>
@@ -1793,7 +1817,7 @@ export default function PoolDetails() {
             </p>
             <div className="flex gap-2 mt-2">
               <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
-                {pool.type === 'v4' ? '🚀 Dynamic Auction' : '📊 Static Auction'}
+                {poolTypeBadgeLabel}
               </div>
               {nftMirrorAddress && (
                 <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-purple-500/10 text-purple-500">
@@ -1847,7 +1871,7 @@ export default function PoolDetails() {
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Auction Type</p>
-              <p className="text-lg">{pool.type === 'v4' ? 'Dynamic (V4)' : 'Static (V3)'}</p>
+              <p className="text-lg">{auctionTypeLabel}</p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Metadata URI</p>
