@@ -1,7 +1,7 @@
 import { GraphQLClient } from "graphql-request";
 
 // Initialize GraphQL client
-const client = new GraphQLClient("https://doppler-sdk-s1ck.marble.live/");
+const client = new GraphQLClient("https://multicurve-testnet.marble.live/");
 // const client = new GraphQLClient("http://localhost:42069/");
 
 // Token type definition
@@ -50,7 +50,6 @@ export interface Pool {
   fee: number;
   type: string;
   dollarLiquidity: bigint;
-  dailyVolume: DailyVolume | null;
   volumeUsd: bigint;
   percentDayChange: number;
   totalFee0: bigint;
@@ -117,7 +116,6 @@ export const GET_POOLS_QUERY = `
         fee
         type
         dollarLiquidity
-        dailyVolume { volumeUsd }
         asset {
           marketCapUsd
           migrated
@@ -157,7 +155,6 @@ export const getPools = async (types?: string[]): Promise<Pools> => {
     fee: p.fee,
     type: p.type || 'v3',
     dollarLiquidity: BigInt(p.dollarLiquidity),
-    dailyVolume: p.dailyVolume ? { volumeUsd: BigInt(p.dailyVolume.volumeUsd) } : null,
     asset: p.asset ? {
       marketCapUsd: BigInt(p.asset.marketCapUsd),
       migrated: p.asset.migrated,
