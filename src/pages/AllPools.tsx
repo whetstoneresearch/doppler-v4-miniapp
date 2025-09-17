@@ -110,10 +110,11 @@ export default function AllPools() {
       </div>
       
       <Tabs value={poolFilter} onValueChange={(value) => setPoolFilter(value as PoolFilter)} className="mb-6">
-        <TabsList className="grid w-full max-w-md grid-cols-3">
+        <TabsList className="grid w-full max-w-2xl grid-cols-4">
           <TabsTrigger value="all">All Pools</TabsTrigger>
           <TabsTrigger value="static">📊 Static Only</TabsTrigger>
           <TabsTrigger value="dynamic">🚀 Dynamic Only</TabsTrigger>
+          <TabsTrigger value="multicurve">🌊 Multicurve</TabsTrigger>
         </TabsList>
       </Tabs>
       

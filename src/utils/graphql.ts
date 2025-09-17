@@ -141,8 +141,9 @@ export const GET_POOLS_QUERY = `
 `;
 
 // Function to fetch pools using TanStack Query
-export const getPools = async (types: string[] = ["v3", "v4"]): Promise<Pools> => {
-  const response = await client.request<{ pools: { items: any[] } }>(GET_POOLS_QUERY, { types });
+export const getPools = async (types?: string[]): Promise<Pools> => {
+  const variables = types?.length ? { types } : {};
+  const response = await client.request<{ pools: { items: any[] } }>(GET_POOLS_QUERY, variables);
   const items: Pool[] = response.pools.items.map((p: any) => ({
     address: p.address,
     chainId: BigInt(p.chainId),
