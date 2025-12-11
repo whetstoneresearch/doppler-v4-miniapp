@@ -1,10 +1,10 @@
-import { createDrift, Drift } from "@delvtech/drift";
+import { createDrift, Drift, ReadWriteAdapter } from "@delvtech/drift";
 import { viemAdapter } from "@delvtech/drift-viem";
 import { getPublicClient } from "@wagmi/core";
 import { config } from "../lib/wagmi";
 import { WalletClient } from "viem";
 
-export function getDrift(walletClient?: WalletClient): Drift {
+export function getDrift(walletClient?: WalletClient): Drift<ReadWriteAdapter> {
   const publicClient = getPublicClient(config);
   // @ts-ignore
   return createDrift({ adapter: viemAdapter({ publicClient, walletClient }) });
