@@ -2,6 +2,12 @@
 
 A modern web application built with React, TypeScript, and Vite that integrates with the Doppler V4 protocol. This application provides a user interface for interacting with Doppler's liquidity bootstrapping protocol and a starting point to build your own applications on Doppler. 
 
+## Status
+
+This repository is no longer maintained 🚨 
+
+View the [Doppler Demo App](https://github.com/whetstoneresearch/doppler-demo-app) which uses the latest [Doppler SDK](https://github.com/whetstoneresearch/doppler-sdk).
+
 ## Tech Stack
 
 - **Frontend Framework**: React 
